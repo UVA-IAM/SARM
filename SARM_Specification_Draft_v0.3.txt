@@ -1,0 +1,1305 @@
+================================================================================
+SARM: System for Attestation and Recertification Management
+EARLY DRAFT SPECIFICATION - Version 0.3 - For Discussion
+================================================================================
+
+Status:        Working Draft / Discussion Document
+Authors:       David Hutchins, University of Virginia
+               Kellen Murphy, University of Virginia
+               Carter R. Griffin, Northern Arizona University
+               (additional authors anticipated)
+Date:          June 2026
+Distribution:  Unlimited, feedback welcomed
+
+
+CHANGES IN THIS VERSION (0.2 -> 0.3)
+================================================================================
+
+Version 0.2 was circulated to early reviewers. This revision builds on it.
+(For the 0.1 -> 0.2 changes, see the v0.2 draft.) The substantive changes:
+
+  1. Capability Exchange added (§4.7): a POST /sarm/v1/capabilities
+     establishment handshake. The Source System declares its conformance
+     level, whether it processes decisions asynchronously, whether it honors
+     conditional retrieval, and the event types it will emit; the Attestation
+     Engine declares only its return channel (whose presence signals async
+     capability). It is a configuration-time exchange whose result configures
+     the integration (bounded, one record per peer) - not per-request state -
+     and it is OPTIONAL, with conservative defaults when skipped. This
+     resolves Q7.
+
+  2. Event model reworked (§7). SARM now standardizes only the event
+     ENVELOPE; it defines NO event vocabulary. The "type" field is a
+     Source-System-determined string, declared via the capability exchange
+     (§4.7); conventional names ("remediation.confirmed", "scope.discovered")
+     are illustrative only. Consumers MUST ignore event types they do not
+     recognize. The event model is unidirectional: a Source System emits
+     events to an Attestation Engine, and SARM defines no Attestation-Engine-
+     emitted events. The former "decision.recorded" and "decision.defaulted"
+     types are removed (observability, not interactions; the latter also
+     described out-of-scope campaign behavior).
+
+  3. Asynchronous return path (§5.4) now references the return channel
+     declared during the capability exchange (§4.7) as well as out-of-band
+     registration.
+
+  4. §4.6 (conformance levels) and the former "future capabilities resource"
+     note now point at the drafted §4.7 rather than at a future revision.
+
+  5. Optional message signing added (§11.6), negotiated through the
+     capability exchange (§4.7). A signed JWT carries a digest of the
+     RFC-8785-canonicalized message plus "iat"/"exp"/"iss"; the digest
+     covers the WHOLE message (no partial or field-level signing). When
+     signing is negotiated, a receiver MUST reject any message lacking a
+     valid whole-body signature and MUST verify the digest against the exact
+     message it acts on (anti-wrapping), and MUST validate against the
+     handshake-pinned algorithm rather than the JWS header (anti-algorithm-
+     confusion; "alg":"none" rejected). The signed "iat" is mandatory; the
+     freshness window is verifier policy. Keys are carried inline (TOFU) or
+     referenced (e.g., federation metadata); the trust root is the parties'
+     choice. Signing is bidirectional: the Source System signs ScopeItems
+     and events, the Attestation Engine signs Decisions.
+
+  6. Q7 resolved (capabilities are now drafted, §4.7). New Q9 (whether to
+     mandate a baseline signing algorithm for interoperability). Open
+     questions remaining: Q1 (resource model), Q6 (standards venue), Q8
+     (BulkResponse shape), Q9 (baseline signing algorithm).
+
+ABSTRACT
+================================================================================
+
+This document is an early draft of a proposed interoperability specification
+for systems that perform attestation and recertification activities. SARM
+defines a common data model and a set of REST APIs that allow an Attestation
+Engine (AE) to discover items requiring attestation from any arbitrary
+Source System (SS), record certifier decisions, and signal pending
+attestation work to Identity Providers during authentication flows.
+
+This draft is intended to provoke discussion among the higher education and
+broader identity-management community. It is not a finished specification.
+Names, URIs, schemas, and protocol details will change.
+
+
+STATUS OF THIS MEMO
+================================================================================
+
+This document is a working draft circulated for community feedback. It does
+not have the status of a standard. The authors intend to gather input on
+whether such a standard is desired, what scope it should cover, and which
+standards body (IETF, OpenID Foundation, OASIS, Kantara) would be the most
+appropriate venue for formalization if community interest is sufficient.
+
+
+REQUIREMENTS LANGUAGE
+================================================================================
+
+The key words "MUST", "MUST NOT", "REQUIRED", "SHALL", "SHALL NOT", "SHOULD",
+"SHOULD NOT", "RECOMMENDED", "MAY", and "OPTIONAL" in this document are to
+be interpreted as described in [RFC2119], when, and only when, they appear
+in all capitals.
+
+
+--------------------------------------------------------------------------------
+1. INTRODUCTION
+--------------------------------------------------------------------------------
+
+1.1  Background
+
+Across institutions, attestation and recertification processes are
+implemented separately within each system that needs them. Managers
+re-certify access in one tool, group owners attest to membership in another,
+end users confirm service usage in a third, and so on. The mechanics of
+these processes, defining scope, assigning certifiers, recording decisions,
+escalating non-responders, and acting on the outcome, are essentially
+identical across all of them, yet each implementation is bespoke.
+
+[SCIM] (System for Cross-domain Identity Management) addresses a similar
+fragmentation in the identity provisioning space. Before SCIM, every
+identity provider and consumer implemented its own provisioning API; today,
+SCIM 2.0 is a widely adopted standard supported across major vendors.
+
+SARM proposes to do for attestation and recertification what SCIM did for
+provisioning: define a common data model and a set of protocol endpoints
+that any system can implement once.
+
+1.2  Scope
+
+This specification covers:
+
+  (a) A common JSON data model for scope items and decisions.
+  (b) A Scope Discovery API by which an Attestation Engine retrieves
+      items needing attestation from a Source System.
+  (c) A Decision Notification API by which an Attestation Engine
+      communicates certifier decisions back to a Source System.
+  (d) An Intercept Check API by which an Identity Provider determines
+      whether an authenticating user has pending attestations.
+  (e) An Event/Webhook schema for outbound notifications of selected
+      lifecycle events.
+  (f) A Capability Exchange by which the two parties establish how they
+      will interact (conformance level, asynchronous processing, event
+      vocabulary, return channel).
+
+Out of scope (for this draft):
+
+  - Campaign definition, scheduling, and lifecycle (an Attestation Engine
+    concern). Campaigns are not a SARM concept and are not exchanged.
+  - Certifier user interfaces and notifications.
+  - Internal storage, audit log formats, or implementation details of
+    the Attestation Engine.
+  - Remediation actions themselves. The downstream action a Source System
+    takes in response to a Decision (removing access, decommissioning a
+    group, notifying another system, etc.) is performed entirely by the
+    Source System and is not specified by SARM. A Source System MAY report
+    completion via the optional "remediation.confirmed" event (§7).
+
+1.3  Terminology
+
+ATTESTATION ENGINE (AE)
+    A system that defines, executes, and manages attestation campaigns.
+    Implements the consumer side of the Scope Discovery API and the
+    server side of the Intercept Check API.
+
+SOURCE SYSTEM (SS)
+    A system that owns subjects requiring periodic attestation
+    (e.g., a group manager, an entitlement store, a service registry).
+    Implements the producer side of the Scope Discovery API and
+    consumes Decision Notifications.
+
+IDENTITY PROVIDER (IdP)
+    A SAML, OIDC, or other authentication provider that may consume the
+    Intercept Check API during authentication flows.
+
+CERTIFIER
+    A person responsible for making an attestation decision about
+    a subject.
+
+SUBJECT
+    An entity being attested to (a user's entitlement, a group
+    membership, a service subscription, etc.).
+
+SCOPE ITEM
+    A single discrete unit needing attestation: the combination of a
+    Subject, the Certifier responsible for it, and the question being
+    asked of that Certifier (the permitted decisions).
+
+DECISION
+    The recorded outcome of an attestation for a Scope Item.
+
+CAMPAIGN
+    A logical grouping of attestation activity within an Attestation
+    Engine, typically with a schedule and a defined population of
+    Subjects. Campaigns are internal to the Attestation Engine and are
+    not exchanged via SARM.
+
+REMEDIATION
+    The downstream action a Source System takes in response to a
+    Decision (e.g., removing access). Remediation is performed by the
+    Source System and is NOT itself a SARM protocol interaction; a
+    Source System MAY report completion via a "remediation.confirmed"
+    event.
+
+1.4  Design Principle: Minimal Wire Surface
+
+SARM messages convey what the receiving party must act upon, together with
+the information needed to act on it. Information that exists only for the
+sending party's internal purposes, campaign structure, scheduling, workflow
+state, subject classification, or the reasoning behind a message, is not
+exchanged.
+
+This principle explains several choices in this draft: the core model does
+not classify subjects (§3.3); Decisions do not carry campaign references
+(§3.4); and the Intercept Check response conveys only an action verdict,
+never the Attestation Engine's internal campaign structure (§6). When in
+doubt about whether a field belongs in a SARM message, ask whether the
+receiver must act on it. If not, it stays on the sender's side. (A purely
+human-facing display string, which the receiver renders but never acts on,
+is permitted on this basis; see "message" in §6.3.)
+
+
+--------------------------------------------------------------------------------
+2. ARCHITECTURE OVERVIEW
+--------------------------------------------------------------------------------
+
+The SARM architecture defines three primary interactions. A Source System's
+action on a Decision (remediation) is internal to the Source System and is
+not a SARM call; it MAY be reported back with an optional event.
+
+  ┌─────────────────┐                  ┌─────────────────┐
+  │                 │ 1. Scope         │                 │
+  │   Attestation   │   Discovery      │   Source        │
+  │   Engine        │ ───────────────► │   System        │
+  │                 │ ◄─────────────── │                 │
+  │                 │   ScopeItems     │                 │
+  │                 │                  │                 │
+  │                 │ 2. Decision      │                 │
+  │                 │   Notification   │                 │
+  │                 │ ───────────────► │  (SS acts on    │
+  │                 │                  │   the decision  │
+  │                 │                  │   internally)   │
+  │                 │ ◄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄ │                 │
+  │                 │   remediation.   │                 │
+  │                 │   confirmed      │                 │
+  │                 │   (optional evt) │                 │
+  └────────┬────────┘                  └─────────────────┘
+           │
+           │ 3. Intercept Check
+           │ ◄────────────────────────
+           │
+  ┌────────┴────────┐
+  │   Identity      │
+  │   Provider      │
+  └─────────────────┘
+
+
+--------------------------------------------------------------------------------
+3. DATA MODEL
+--------------------------------------------------------------------------------
+
+3.1  General Conventions
+
+All resources are represented as JSON objects. Every resource MUST include:
+
+  - "schemas": an array of schema URIs identifying the resource type.
+    The first entry identifies the core schema; subsequent entries
+    identify extension schemas.
+  - "id": a stable, opaque identifier unique within the issuing system.
+  - "meta": an object containing resource metadata (see §3.2).
+
+Resource representations follow conventions established by [SCIM]
+where applicable.
+
+3.1.1  Identifier Opacity
+
+All identifiers exchanged via SARM, including resource "id" values and the
+identifier-bearing fields "subjectId", "certifierHint", and "resourceId",
+are opaque tokens. Conforming implementations MUST NOT infer structure or
+meaning from their content, even when a value appears to follow a
+recognizable scheme (e.g., "user:jdoe" or "group:app:enterprise:..."). Any
+internal structure is the private business of the issuing system.
+
+3.2  Common "meta" Object
+
+  {
+    "resourceType": "ScopeItem",
+    "created": "2026-05-01T10:00:00Z",
+    "lastModified": "2026-05-01T10:00:00Z",
+    "version": "W/\"a330bc54f0671c9\"",
+    "location": "https://source.example.edu/sarm/v1/ScopeItems/abc-123"
+  }
+
+The "version" field, if present, MUST be an HTTP ETag value usable for
+conditional requests.
+
+3.3  ScopeItem Resource
+
+   Schema URI:  urn:ietf:params:sarm:schemas:core:1.0:ScopeItem
+
+   A ScopeItem represents one atomic attestation task: a single
+   Certifier answering a single question about a single Subject.
+   Atomicity is deliberate, one ScopeItem is always one question about
+   one object. Where a real-world attestation concerns many objects
+   (e.g., 25 members of a group), the Source System emits many
+   ScopeItems, each with a unique id, and relates them with a common
+   grouping key (see resourceId). This keeps the protocol uniform; how
+   an implementation reconciles grouped responses into real-world
+   action is a Source System concern, not a protocol concern.
+
+   Envelope fields (common to all SARM resources):
+
+     schemas      array    - MUST contain the ScopeItem schema URI.
+     id           string   - Unique identifier for this ScopeItem within
+                              the Source System. Opaque (see §3.1.1).
+     meta         object   - Resource metadata (resourceType, created,
+                              etc.), per the common resource model.
+
+   Required fields:
+
+     subjectId         string  - Identifier of the subject of the
+                                 question in the Source System. Opaque.
+     subjectLabel      string  - Human-readable label for the subject,
+                                 for presentation to the certifier.
+     certifierHint     string  - Suggested certifier (external id). The
+                                 Attestation Engine MAY override certifier
+                                 resolution. Opaque.
+     decisionOptions   array   - Ordered, non-empty list of the decisions
+                                 the Source System will accept for this
+                                 item (see §3.3.1). The set of valid
+                                 responses is owned entirely by the
+                                 Source System.
+
+   Optional fields:
+
+     resourceId        string  - Opaque grouping key. ScopeItems that
+                                 share a resourceId MAY be presented
+                                 together by the Attestation Engine (e.g.,
+                                 bulk attestation of one certifier's group
+                                 memberships). It is an equivalence key
+                                 only; it is never returned in a Decision
+                                 and carries no structural meaning (see
+                                 §3.1.1). Omit when an item does not belong
+                                 to a group.
+     resourceLabel     string  - Human-readable label for the grouping,
+                                 for presentation only. Meaningful only
+                                 when resourceId is present; omit otherwise.
+     decisionPrompt    string  - Source-System-defined prompt to present
+                                 alongside the decision options. The
+                                 Attestation Engine MAY override or supply
+                                 its own.
+     contextData       object  - Additional metadata to display to the
+                                 certifier (last access time, role
+                                 description, justification, date added,
+                                 etc.). Source Systems MAY include
+                                 arbitrary keys. Attestation Engines MUST
+                                 NOT rely on specific keys unless defined
+                                 by a registered extension. contextData is
+                                 for human display, not protocol behavior.
+
+3.3.1  decisionOptions
+
+   decisionOptions is an ordered array. Each element is an object:
+
+     value   string  - The machine-readable decision key the Attestation
+                       Engine returns to the Source System in a Decision.
+     label   string  - Human-readable text for presenting this option.
+
+   The Source System owns the vocabulary of valid responses, because it
+   is the party that must act on the response. Therefore:
+
+   o  The Attestation Engine MUST present only the decisionOptions
+      declared for an item, and MUST preserve their order.
+
+   o  The Attestation Engine MUST NOT submit a Decision whose value was
+      not declared in that item's decisionOptions.
+
+   o  The Source System MUST reject a Decision carrying an undeclared
+      value (see §5.5 for the error semantics).
+
+   decisionOptions MUST contain at least one element. An Attestation
+   Engine that receives an item with an empty or absent decisionOptions
+   SHOULD treat the item as malformed and decline to present it.
+
+3.3.2  Identifier opacity
+
+   The id, subjectId, certifierHint, and resourceId fields are opaque
+   tokens per the general rule in §3.1.1.
+
+   Example:
+
+     {
+       "schemas": ["urn:ietf:params:sarm:schemas:core:1.0:ScopeItem"],
+       "id": "abc-123",
+       "meta": { "resourceType": "ScopeItem", "created": "..." },
+       "subjectId": "user:jdoe",
+       "subjectLabel": "Jane Doe",
+       "certifierHint": "user:msmith",
+       "resourceId": "group:app:enterprise:finance-readers",
+       "resourceLabel": "Finance Readers (Grouper)",
+       "decisionPrompt": "Please choose a membership action.",
+       "decisionOptions": [
+         { "value": "keep_membership",   "label": "Approve membership" },
+         { "value": "remove_membership", "label": "Revoke membership" }
+       ],
+       "contextData": {
+         "memberSince":  "2023-04-12",
+         "lastAccessAt": "2026-04-30T14:22:00Z",
+         "addedBy":      "user:hradmin"
+       }
+     }
+
+3.4  Decision Resource
+
+Schema URI: urn:ietf:params:sarm:schemas:core:1.0:Decision
+
+A Decision records the outcome of attestation for a single ScopeItem.
+
+Required fields:
+
+  scopeItemId         string   - ID of the ScopeItem this Decision
+                                  applies to.
+  decision            string   - The decision selected by the certifier.
+                                  MUST exactly match one of the "value"
+                                  entries in the corresponding ScopeItem's
+                                  decisionOptions. SARM does not define a
+                                  fixed decision vocabulary; the valid set
+                                  is declared per item by the Source System
+                                  (see §3.3.1).
+  certifierId         string   - Identifier of the person who made
+                                  the decision.
+  decidedAt           string   - RFC3339 timestamp.
+
+Optional fields:
+
+  channel             string   - Informational. How the decision was
+                                  captured. SARM defines NO channel
+                                  vocabulary and assigns no meaning to its
+                                  content; it is an opaque string the
+                                  Attestation Engine MAY supply and the
+                                  Source System MAY record. Implementations
+                                  MUST NOT branch on its value. The AE and
+                                  SS may agree on conventional values out of
+                                  band (e.g., "web", "email", "intercept",
+                                  "bulk" - illustrative only, not defined by
+                                  SARM).
+  comment             string   - Free-text comment from the certifier.
+  delegatedFrom       string   - If the certifier was acting on
+                                  behalf of another person.
+
+[Note: a Decision carries only the facts of the decision itself, who
+decided, what they decided, when, and how. It deliberately does NOT carry
+a campaign reference; the campaign that produced a decision is internal to
+the Attestation Engine (§1.4) and is not a Source System concern.]
+
+Example:
+
+  {
+    "schemas": ["urn:ietf:params:sarm:schemas:core:1.0:Decision"],
+    "id": "dec-xyz-789",
+    "meta": { "resourceType": "Decision", "created": "..." },
+    "scopeItemId": "abc-123",
+    "decision": "remove_membership",
+    "certifierId": "user:msmith",
+    "decidedAt": "2026-05-15T09:14:00Z",
+    "channel": "intercept",
+    "comment": "User changed roles last quarter."
+  }
+
+(The "channel" value above is illustrative; SARM defines no channel values.)
+
+3.5  Certifier Resource (reference)
+
+In most cases, Certifiers are referenced by ID rather than expressed as
+full resources. When a Certifier resource representation is needed
+(e.g., in a directory listing), it SHOULD follow [SCIM] User schema
+conventions, with an additional SARM extension if needed.
+
+
+--------------------------------------------------------------------------------
+4. DISCOVERY API
+--------------------------------------------------------------------------------
+
+This section defines how an Attestation Engine learns what a Source System
+offers: the ScopeItems needing attestation (§4.1-§4.6), and the Source
+System's capabilities (§4.7).
+
+The Source System exposes a Scope Discovery endpoint that the Attestation
+Engine queries to retrieve ScopeItems.
+
+4.1  Endpoint
+
+  GET {base_url}/sarm/v1/ScopeItems
+
+4.2  Query Parameters
+
+  filter        SCIM-style filter expression (see §4.4)
+  startIndex    1-based pagination index (default 1)
+  count         page size (default 100, max 1000)
+  attributes    comma-separated list of attributes to return
+
+4.3  Response
+
+  200 OK
+  Content-Type: application/scim+json
+
+  {
+    "schemas": ["urn:ietf:params:sarm:api:messages:1.0:ListResponse"],
+    "totalResults": 245,
+    "startIndex": 1,
+    "itemsPerPage": 100,
+    "Resources": [ <ScopeItem>, <ScopeItem>, ... ]
+  }
+
+4.4  Filtering
+
+Source Systems SHOULD support filtering. Filter syntax follows
+[SCIM] §3.4.2.2. Filtering on the core fields below is portable:
+
+  certifierHint eq "user:msmith"
+  resourceId eq "group:app:enterprise:finance-readers"
+  meta.created gt "2026-01-01T00:00:00Z"
+
+Filtering on contextData keys or extension fields is PERMITTED but is not
+guaranteed to be interoperable, as those keys are defined by the Source
+System or by an extension rather than by core SARM. SARM does not define a
+core field for the "kind" of a subject; an Attestation Engine and Source
+System that wish to filter by such a classification do so by agreement,
+typically via a contextData key or an extension.
+
+4.5  Retrieving a Single ScopeItem
+
+An Attestation Engine MAY retrieve one ScopeItem directly by its
+identifier. This is the canonical retrieval for the URL advertised in a
+ScopeItem's "meta.location".
+
+  GET {base_url}/sarm/v1/ScopeItems/{id}
+
+Responses:
+
+  200 OK         - The ScopeItem representation.
+  404 Not Found  - Returned WITH a SARM Error object (§10), scimType
+                   "noSuchScopeItem": the item is not in scope. An item the
+                   AE previously discovered may have left scope (e.g., the
+                   underlying access was already resolved), and the AE MAY
+                   drop it. Per the body-authoritative rule (§10), the AE
+                   treats this as an authoritative "not in scope" answer
+                   only because of the SARM Error body; a 404 with no SARM
+                   body means SARM did not answer (a transport or
+                   infrastructure condition), not "not in scope".
+
+The "attributes" parameter (§4.2) MAY be used to limit the returned fields.
+
+Conditional retrieval (RECOMMENDED): a Source System SHOULD honor an
+"If-None-Match" header carrying the ScopeItem's "meta.version" ETag,
+returning 304 Not Modified when the item is unchanged. This lets an
+Attestation Engine cheaply re-validate an item, for example immediately
+before presenting it to a certifier, without transferring the full
+representation. A minimal Source System that does not implement conditional
+requests simply returns 200 with the current representation.
+
+Retrieving a single ScopeItem imposes no storage obligation beyond what a
+Source System already maintains to serve Scope Discovery (§4.1): the Source
+System is, by definition, the authority on what is in scope.
+
+4.6  Conformance Levels
+
+  LEVEL 1 (BASIC):  Return all ScopeItems. Pagination required.
+                    Filtering optional.
+  LEVEL 2 (FULL):   Filtering and attribute selection supported.
+  LEVEL 3 (PUSH):   Source System can push ScopeItem updates to AE via an
+                    event (conventionally "scope.discovered"; see §7).
+
+  A Source System advertises which level it implements through the
+  capability exchange (§4.7), so an Attestation Engine can adapt without
+  trial and error.
+
+4.7  Capability Exchange
+
+Before relying on optional behaviors, an Attestation Engine and a Source
+System MAY exchange capabilities to establish how they will interact. This
+is a configuration-time establishment step, not a per-request call: its
+result configures the integration (bounded, one record per peer) and does
+not impose per-transaction state on either party. (Storing a peer's declared
+capabilities as integration configuration is the ordinary cost of having a
+configured relationship; it is not the kind of unbounded, per-transaction
+retention that SARM declines to require elsewhere, e.g. of Decisions, §5.)
+
+  POST {base_url}/sarm/v1/capabilities
+
+The Attestation Engine sends its capabilities; the Source System responds
+with its own. The exchange is deliberately asymmetric, mirroring the
+relationship: the Source System is the authority on scope, decisions, and
+events and declares accordingly, while the Attestation Engine need only
+provide a return channel.
+
+  Attestation Engine -> Source System (request):
+
+    {
+      "schemas": ["urn:ietf:params:sarm:api:messages:1.0:Capabilities"],
+      "role": "attestationEngine",
+      "returnChannel": { ... where the SS may deliver events ... },
+      "signing": {
+        "signs": true,                  // signs the Decisions it sends
+        "requiresPeerSignatures": false,
+        "algorithms": ["ES256"],
+        "key": { ... public key, or a reference; see §11.6 ... }
+      }
+    }
+
+  Source System -> Attestation Engine (response):
+
+    {
+      "schemas": ["urn:ietf:params:sarm:api:messages:1.0:Capabilities"],
+      "role": "sourceSystem",
+      "conformanceLevel": 2,
+      "supportsAsync": true,
+      "supportsConditionalGet": true,
+      "events": ["remediation.confirmed", "scope.discovered"],
+      "signing": {
+        "signs": true,                  // signs the ScopeItems and events it sends
+        "requiresPeerSignatures": true, // requires the AE to sign Decisions
+        "algorithms": ["ES256"],
+        "key": { ... public key, or a reference; see §11.6 ... }
+      }
+    }
+
+The Attestation Engine's "returnChannel" is the only thing the Source System
+needs to know about the Engine. Its presence signals that the Engine can
+receive asynchronous event delivery (§5.4, §7); its absence means the Source
+System MUST treat the Engine as synchronous-only, since it has nowhere to
+send a completion event and therefore MUST NOT return 202 (§5.4). SARM
+specifies that a return channel is declared, not how it is authenticated;
+transport and authentication remain the parties' choice (§8).
+
+The Source System's response declares what the Engine must adapt to: its
+conformance level (§4.6), whether it processes decisions asynchronously,
+whether it honors conditional retrieval (§4.5), and the event types it will
+emit (§7). The set of capability fields is illustrative and extensible; a
+party MUST ignore capability fields it does not recognize.
+
+The capability exchange is OPTIONAL. Two parties that have established these
+facts by other means (shared configuration, documentation) need not perform
+it. Where it is not performed, the conservative defaults apply: no async
+without an established return channel (§5.4), and unrecognized event types
+ignored (§7).
+
+The capability exchange is also where message signing is negotiated. Each
+party MAY declare a "signing" object stating whether it signs the messages
+it sends, whether it requires its peer to sign, the algorithm(s) it uses,
+and its public key (carried inline or referenced). This is the natural home
+for the negotiation because signing is bidirectional and asymmetric in the
+same way the relationship is: the Source System signs the ScopeItems and
+events it emits, the Attestation Engine signs the Decisions it sends, and
+each verifies the other. The mechanism, coverage, and verification rules are
+defined in §11.6; what the capability exchange contributes is agreement on
+whether signing is in force, which algorithm is pinned, and where each
+party's key is found.
+
+
+--------------------------------------------------------------------------------
+5. DECISION NOTIFICATION API
+--------------------------------------------------------------------------------
+
+The Attestation Engine notifies the Source System of recorded decisions.
+
+[Note: A Decision is a transient notification, not a hosted resource. SARM
+defines no Decision retrieval endpoint (no GET /Decisions/{id}), and a
+Source System is NOT required to retain a Decision after acting on it.
+Unlike a ScopeItem, which is authoritative state the Source System holds by
+definition (§4.5), a Decision originates at the Attestation Engine; the
+Source System consumes it, acts, and is done. Whether either party keeps a
+long-term record of decisions is a deployment and policy matter (audit
+needs, data-minimization requirements, and so on), not a protocol
+requirement. This keeps the implementation burden low and leaves both
+Attestation Engine and Source System designers free to choose their own
+system-of-record posture (§1.4).]
+
+5.1  Endpoint
+
+  POST {base_url}/sarm/v1/Decisions
+
+5.2  Request Body
+
+A single Decision resource, or an array of Decisions for batch
+notification:
+
+  {
+    "schemas": ["urn:ietf:params:sarm:api:messages:1.0:BulkRequest"],
+    "Operations": [
+      { "method": "POST", "path": "/Decisions", "data": <Decision> },
+      { "method": "POST", "path": "/Decisions", "data": <Decision> }
+    ]
+  }
+
+5.3  Response
+
+A single Decision returns a status code per §5.4. A batch returns
+200 OK with a BulkResponse body.
+
+  [Reviewer note: the BulkResponse structure is not yet defined. A future
+   revision should specify it; adopting SCIM's BulkResponse shape
+   (RFC 7644 §3.7), with per-operation status, is the likely path. See Q8.]
+
+5.4  Response Codes and Idempotency
+
+When the Attestation Engine POSTs a Decision, the Source System responds
+with a status code describing what it did. SARM defines the meaning of
+each response so the Attestation Engine can act on it. SARM does NOT
+mandate the Source System's internal idempotency, remediation, or
+supersession behavior; the Source System selects the response that
+describes what it did, according to its own policy.
+
+  201 Created     - First-time record of this Decision. The Source System
+                    has accepted and recorded it synchronously. The AE
+                    marks the item complete.
+
+  200 OK          - Idempotent replay: this Decision "id" was already
+                    recorded. The Source System returns the existing
+                    Decision unchanged; no new state results. The AE marks
+                    the item complete.
+
+  202 Accepted    - Accepted, but the Source System will act on the
+                    Decision asynchronously. The AE marks the item
+                    submitted and awaits a completion event (conventionally
+                    "remediation.confirmed", §7), delivered over the return
+                    channel the AE declared during the capability exchange
+                    (§4.7) or established out-of-band, and correlated by the
+                    Decision "id" / "scopeItemId". A Source System SHOULD NOT
+                    return 202 unless it has such an established return
+                    channel; an asynchronous acceptance with no way to report
+                    completion leaves the AE unable to learn the outcome.
+
+  409 Conflict    - The request conflicts with existing state. A Source
+                    System MAY return this, per its own policy, when:
+                      (a) the same Decision "id" is reused with a different
+                          body (misuse of the idempotency key); or
+                      (b) a new Decision would supersede an existing
+                          decision for the same ScopeItem and the Source
+                          System does not permit supersession.
+                    The AE MUST NOT blindly retry a 409; it is terminal
+                    until the request changes.
+
+  400 Bad Request - The Decision is malformed or carries an undeclared
+                    decision value (see §5.5).
+
+Idempotency is keyed on the Decision "id". An Attestation Engine retrying a
+Decision (for example, after a lost response) MUST reuse the same "id", so
+the Source System can recognize the retry and respond with 200 rather than
+recording a duplicate. How the Source System recognizes and handles the
+retry is its own concern; SARM specifies only that the "id" is the key and
+what the responses mean.
+
+SARM does not specify whether a Decision is mutable, immutable, or
+supersedable. That is a property of Source System and Attestation Engine
+state, not of the wire protocol; the response codes above let a Source
+System signal what it did, they do not constrain what it may do. (A common
+and recommended implementation keeps an immutable audit record of each
+decision asked and answered, but SARM neither requires nor precludes this.)
+
+5.5  Decision Value Validation
+
+A Source System MUST reject a Decision whose "decision" value does not
+match one of the declared decisionOptions for the referenced ScopeItem.
+The rejection uses HTTP 400 with an Error object (see §10):
+
+  {
+    "schemas": ["urn:ietf:params:sarm:api:messages:1.0:Error"],
+    "status": "400",
+    "scimType": "invalidValue",
+    "detail": "Decision value 'foo' is not a declared option for ScopeItem abc-123."
+  }
+
+
+--------------------------------------------------------------------------------
+6. INTERCEPT CHECK API
+--------------------------------------------------------------------------------
+
+The Attestation Engine exposes an Intercept Check endpoint that Identity
+Providers query during authentication to determine whether to redirect
+the user to complete pending attestations.
+
+6.1  Endpoint
+
+  GET {base_url}/sarm/v1/Intercept/check
+
+6.2  Query Parameters
+
+  subject       Required. The authenticating principal's identifier.
+  audience      Optional. The SP/RP the user is authenticating to.
+                Allows the AE to scope its verdict to relevant
+                attestations only.
+  context       Optional. Additional context (e.g., authentication
+                method, MFA status) as a JSON-encoded object.
+
+6.3  Response
+
+  200 OK
+  Content-Type: application/json
+
+  {
+    "action": "redirect_optional",
+    "redirectUrl": "https://arms.example.edu/attest/intercept/abc",
+    "message": "You have access reviews waiting. You can take care of them now, or continue and handle them later."
+  }
+
+The response conveys a single action verdict (see §6.5). Two optional
+fields MAY accompany it, for different reasons:
+
+  redirectUrl  string  - The URL to which the user should be sent.
+                         Conditionally REQUIRED: it MUST be present when
+                         "action" is "redirect_optional" or
+                         "redirect_required" (the IdP cannot act on a
+                         redirect without it), and SHOULD be omitted when
+                         "action" is "none". This field is load-bearing:
+                         the IdP acts on it.
+
+  message      string  - OPTIONAL, and independent of "action". A
+                         human-readable string the Attestation Engine
+                         supplies for the Identity Provider to OPTIONALLY
+                         display to the user. It MAY accompany any action
+                         value, including "none" (e.g., an informational
+                         notice where local policy neither blocks nor
+                         prompts). The IdP MAY display it verbatim and MAY
+                         ignore it; it MUST NOT parse it or alter its
+                         behavior based on its content. The verdict is
+                         carried solely by "action"; "message" is
+                         presentation only, and the spec defines no
+                         relationship between the two fields.
+                         [Internationalization of "message" (language
+                         tagging or locale maps) is deferred to a future
+                         revision; this draft defines a single string.]
+
+The Attestation Engine returns ONE aggregate verdict. If a user has pending
+items spanning multiple internal campaigns, the AE reconciles them itself
+(typically by returning the most restrictive applicable action). The IdP
+receives no information about the AE's internal campaigns, item counts, or
+scoping logic; it needs only the verdict and, where applicable, the
+redirect target and an optional display message (§1.4).
+
+6.4  Performance Requirements
+
+  - The Intercept Check endpoint MUST respond within 500ms at p99.
+  - Identity Providers SHOULD set a client-side timeout of 1000ms
+    or less.
+  - On timeout or error, the Identity Provider MUST fail open
+    (proceed as though the action were "none").
+  - Response caching with a TTL of up to 60 seconds is RECOMMENDED.
+
+6.5  Action Values
+
+  "none"               - No pending items apply. The IdP continues the
+                         authentication transparently. No redirect.
+  "redirect_optional"  - Pending items exist. The IdP SHOULD offer the user
+                         the opportunity to handle them at redirectUrl, but
+                         MUST allow authentication to continue if the user
+                         declines.
+  "redirect_required"  - The IdP MUST send the user to redirectUrl to handle
+                         pending items before authentication completes.
+
+Per the fail-open requirement of §6.4, on timeout or error the IdP MUST
+proceed as though the action were "none". SARM is not part of the
+authentication trust chain (§11.4).
+
+
+--------------------------------------------------------------------------------
+7. EVENT / WEBHOOK SCHEMA
+--------------------------------------------------------------------------------
+
+SARM's event model is unidirectional: a Source System emits events to an
+Attestation Engine. SARM defines no events emitted by an Attestation Engine.
+(An Attestation Engine may of course emit its own telemetry for its own
+purposes; that is outside SARM.) A Source System delivers events to the
+return channel the Attestation Engine declared during the capability
+exchange (§4.7) or established out-of-band. This same channel is the return
+path for asynchronous Decision processing (§5.4): a Source System that
+returned 202 reports completion by emitting an event here, correlated to the
+original Decision by its "id" / "scopeItemId".
+
+What SARM standardizes is the event ENVELOPE. It does NOT define an event
+vocabulary; the meaning of an event "type" is determined by the emitting
+Source System and declared through its capabilities (§4.7).
+
+7.1  Event Envelope
+
+  {
+    "schemas": ["urn:ietf:params:sarm:api:messages:1.0:Event"],
+    "id": "evt-...",
+    "type": "remediation.confirmed",
+    "occurredAt": "2026-05-15T09:14:01Z",
+    "source": "https://source.example.edu",
+    "data": { ... }
+  }
+
+  id          - Unique event identifier; the consumer's idempotency key.
+  type        - The event type: a Source-System-determined string. SARM
+                defines no values (see §7.2).
+  occurredAt  - RFC3339 timestamp.
+  source      - Identifies the emitting Source System. A consumer that works
+                with multiple Source Systems uses this to apply the correct
+                declared vocabulary.
+  data        - Event-specific payload.
+
+7.2  Event Types
+
+SARM does not define an event vocabulary. The "type" field is an opaque,
+Source-System-determined string; a Source System declares the event types it
+will emit through the capability exchange (§4.7). A consumer MUST ignore
+event types it does not recognize. (This is what makes an open vocabulary
+safe for events, unlike decision values: an unrecognized event can simply be
+discarded, whereas an undeclared decision value cannot be acted upon.)
+
+Conventional type names, illustrative only and NOT defined by SARM:
+
+  remediation.confirmed  - A Source System reports it has finished acting on
+                           a Decision (the asynchronous return signal; §5.4).
+                           Remediation itself is not a SARM interaction
+                           (§1.2, §1.3); this event only reports completion.
+  scope.discovered       - A Source System reports new or changed ScopeItems
+                           (the LEVEL 3 push signal; §4.6).
+
+  [Note: SARM intentionally defines no campaign lifecycle events. "Campaign"
+   is an Attestation-Engine-internal concept (§1.2); per the minimal-wire-
+   surface principle (§1.4), SARM neither exchanges it nor emits events about
+   it.]
+
+7.3  Delivery
+
+Webhooks MUST be delivered with at-least-once semantics. Consumers MUST
+treat event IDs as idempotency keys.
+
+
+--------------------------------------------------------------------------------
+8. AUTHENTICATION
+--------------------------------------------------------------------------------
+
+All endpoints MUST be authenticated (§11.1) and MUST be served over TLS
+1.2 or higher. Beyond those two requirements, SARM does not specify the
+authentication mechanism; the Attestation Engine and Source System agree on
+the mechanism appropriate to their deployment.
+
+Common choices today include OAuth 2.0 Bearer Tokens [RFC6750] and Mutual
+TLS [RFC8705]; HTTP Basic Authentication over TLS may suffice for interop
+testing but is not recommended for production. This list is illustrative,
+not prescriptive, and is expected to evolve with authentication practice;
+SARM takes no position on which mechanism a deployment selects.
+
+
+--------------------------------------------------------------------------------
+9. EXTENSION MODEL
+--------------------------------------------------------------------------------
+
+SARM follows the [SCIM] extension pattern. Extensions are identified by
+their schema URI and included in the resource's "schemas" array. Extension
+data is placed in the resource under the schema URI as the key.
+
+Extensions are also where an implementation expresses classification that
+core SARM deliberately omits (such as the "kind" of a subject). A
+Grouper-specific extension might define:
+
+  urn:ietf:params:sarm:schemas:extension:grouper:1.0:ScopeItem
+
+with fields like "stem", "privilegeType", etc. A ScopeItem using this
+extension would appear as:
+
+  {
+    "schemas": [
+      "urn:ietf:params:sarm:schemas:core:1.0:ScopeItem",
+      "urn:ietf:params:sarm:schemas:extension:grouper:1.0:ScopeItem"
+    ],
+    "id": "abc-123",
+    "subjectId": "user:jdoe",
+    "subjectLabel": "Jane Doe",
+    "certifierHint": "user:msmith",
+    "resourceId": "group:app:enterprise:finance-readers",
+    "decisionOptions": [
+      { "value": "keep_membership",   "label": "Approve membership" },
+      { "value": "remove_membership", "label": "Revoke membership" }
+    ],
+    "urn:ietf:params:sarm:schemas:extension:grouper:1.0:ScopeItem": {
+      "stem": "app:enterprise",
+      "privilegeType": "members"
+    }
+  }
+
+
+--------------------------------------------------------------------------------
+10. ERROR HANDLING
+--------------------------------------------------------------------------------
+
+Errors are returned as JSON objects conforming to:
+
+  {
+    "schemas": ["urn:ietf:params:sarm:api:messages:1.0:Error"],
+    "status": "400",
+    "scimType": "invalidFilter",
+    "detail": "Filter expression could not be parsed."
+  }
+
+Standard HTTP status codes apply. "scimType" values follow [SCIM]
+§3.12 where applicable.
+
+Body-authoritative responses. SARM protocol meaning is carried in the SARM
+message body, not in the HTTP status code alone. A response is an
+authoritative SARM answer only if it carries a recognizable SARM body: a
+resource (e.g., a ScopeItem) or an Error object as above. A response that
+lacks a recognizable SARM body MUST NOT be treated as an authoritative SARM
+answer, regardless of status code; it indicates a transport or
+infrastructure condition (the endpoint is not a SARM service, a proxy or
+gateway error, the service is unavailable, and so on). HTTP status codes
+are therefore a hint, not the signal. For example, a 404 carrying a SARM
+Error object means the requested resource is not in scope, whereas a 404
+with no SARM body means SARM did not answer at all.
+
+
+--------------------------------------------------------------------------------
+11. SECURITY CONSIDERATIONS
+--------------------------------------------------------------------------------
+
+11.1  Authentication and Authorization
+
+  All endpoints MUST be authenticated. Source Systems MUST authorize
+  ScopeItem requests according to the requesting AE's permission scope.
+  An AE MUST NOT be granted broader scope than necessary.
+
+11.2  Sensitive Data Exposure
+
+  ScopeItem.contextData MAY contain sensitive information (HR data, risk
+  signals, etc.). Source Systems MUST apply data minimization and
+  MUST honor the AE's "attributes" query parameter to limit response
+  payload.
+
+11.3  Intercept Check Privacy and Display Safety
+
+  The Intercept Check endpoint reveals information about an authenticating
+  user's attestation status. It MUST only be callable by trusted IdPs
+  and MUST NOT expose information beyond what the IdP needs to make an
+  intercept decision. (The minimal response of §6.3 supports this: the
+  IdP receives only an action verdict, not the underlying items.)
+
+  The optional "message" field (§6.3) is rendered in the IdP's
+  authentication UI. Although the Attestation Engine is a trusted party,
+  the IdP SHOULD treat "message" as untrusted display text: escape it for
+  the rendering context and never execute markup or script it may contain.
+
+11.4  Fail-Open Authentication
+
+  IdPs implementing the Intercept Check MUST fail open on error or
+  timeout. SARM is not part of the authentication trust chain, its
+  unavailability MUST NOT prevent users from authenticating.
+
+11.5  Replay Protection
+
+  Decision notifications and event deliveries MUST be idempotent.
+  Consumers MUST use the resource "id" or event "id" as the idempotency
+  key. Where message signing is in force (§11.6), the signed timestamp
+  provides an additional, cryptographic freshness check.
+
+11.6  Message Signing
+
+  SARM messages MAY be signed at the application layer, independently of
+  the transport. This is OPTIONAL and negotiated through the capability
+  exchange (§4.7): signing is in force for a pair only when both parties
+  have agreed to it there. Transport security (§8) protects the channel;
+  message signing protects the message itself, end to end, so that its
+  authenticity and integrity survive independently of who terminated the
+  TLS connection. This matters most for the federated deployments that
+  treat cross-organizational messages as needing their own proof of origin.
+
+  Construction. A signature is carried alongside the resource as a signed
+  JWT (JWS). The JWT's claims are a digest of the message, an issued-at
+  timestamp "iat", an optional expiry "exp", and an issuer "iss". The
+  resource itself travels as ordinary JSON; the JWT signs a digest of it,
+  not a remodeled copy of its fields. The digest is computed over the
+  message canonicalized per RFC 8785 (JSON Canonicalization Scheme), so
+  both parties hash identical bytes.
+
+  Whole-message coverage. The digest MUST cover the ENTIRE canonicalized
+  resource, every field, as a single unit. SARM does not define partial or
+  field-level signing: a message is trusted as a whole or not at all. The
+  signed JWT claims (iat / exp / iss) are themselves covered by the JWT
+  signature, so both the resource (through the digest) and the freshness
+  and issuer assertions (directly) are signed; nothing in the message is
+  left uncovered.
+
+  Verification, when signing is in force. A receiver MUST reject any
+  message that lacks a valid signature over the complete body. A receiver
+  MUST verify the digest against the exact message it will act upon, never
+  a different copy: this is what forecloses the signature-wrapping class of
+  attack, in which a verified element and a processed element are allowed
+  to diverge. A receiver MUST validate the signature against the algorithm
+  pinned during the capability exchange (§4.7), NOT against the algorithm
+  asserted in the JWS header; "alg": "none" MUST be rejected. Pinning the
+  algorithm by negotiation rather than trusting the message's self-
+  description closes the algorithm-confusion class of attack.
+
+  Freshness. The signed claims MUST include "iat". This is the mechanism by
+  which freshness is verifiable at all. The acceptable freshness window and
+  clock-skew tolerance are the verifier's policy and are NOT specified by
+  SARM; a signer MAY additionally set "exp".
+
+  Keys and trust. A party's public key is conveyed through the capability
+  exchange (§4.7), either carried inline or referenced. How the receiving
+  party comes to TRUST that key is the parties' choice and is not mandated
+  by SARM. Two common models: (a) trust on first use, in which the key is
+  accepted at establishment over the authenticated channel and cached as
+  integration configuration, optionally hardened by verifying a key
+  fingerprint out of band (the model SSH host keys have used for decades);
+  and (b) reference to an existing trust root, such as federation metadata,
+  which a federated deployment will generally prefer because the key is
+  vouched for by a third party and rotation and revocation are handled at
+  that layer. SARM provides the exchange; the assurance level emerges from
+  the method the parties choose.
+
+  Direction. Signing is bidirectional and each party verifies the other:
+  the Source System signs the ScopeItems and events it sends, the
+  Attestation Engine signs the Decisions it sends.
+
+
+--------------------------------------------------------------------------------
+12. OPEN QUESTIONS FOR DISCUSSION
+--------------------------------------------------------------------------------
+
+The following questions are explicitly open and intended to prompt
+community discussion:
+
+  Q1.  Is SCIM the right inspiration for the resource model, or would
+       a simpler/different model serve better?
+
+  Q2.  [Resolved] Should SARM define campaign management as
+       part of the standard? No. Campaigns are an Attestation-Engine-
+       internal concept and are not exchanged via SARM (§1.2, §1.4).
+       Retained here for the record.
+
+  Q3.  [Resolved] Should Decisions flow Engine->Source (push) or
+       Source->Engine (pull)? Push. A pull model would require the
+       Attestation Engine to retain decisions until a Source System
+       collects them, imposing a storage obligation on the AE and
+       foreclosing an AE that stores nothing by policy. This mirrors the
+       decision not to define a Decision retrieval endpoint (§5): together,
+       push notification and the absence of a Decision getter mean SARM
+       never requires either party to be the durable system of record for
+       decisions. A Source System that cannot accept inbound notifications
+       is a transport/integration concern (handled by a relay or gateway),
+       not a reason to invert the protocol's data-ownership model.
+
+  Q4.  [Resolved] Should SARM define protocol-specific bindings
+       (Shibboleth, Keycloak, SAML, OIDC) for the Intercept Check? No.
+       SARM defines a single generic endpoint that conveys an action
+       verdict and, where applicable, a redirect target and a display
+       message (§6). How an Identity Provider consumes that verdict within
+       its own authentication flow, SAML, OIDC, or otherwise, is the IdP's
+       concern, not the protocol's (§1.4). Product- and protocol-specific
+       integration is out of scope by design; non-normative integration
+       guidance (e.g., how to wire this into a particular IdP) may be
+       maintained by the community alongside the spec, but is not part of
+       it.
+
+  Q5.  [Resolved] Should SARM mandate a specific authentication mechanism?
+       No. All endpoints MUST be authenticated and TLS-protected (§8,
+       §11.1), but SARM does not mandate which mechanism, bearer tokens,
+       mutual TLS, or otherwise. Mandating one would add significant
+       complexity and age poorly as authentication standards evolve. The
+       Attestation Engine and Source System agree on the mechanism
+       appropriate to their deployment. Auth-agnostic does not mean
+       auth-optional: authentication and transport security are required;
+       only the mechanism is unspecified.
+
+  Q6.  Where should this work be incubated, Internet2/InCommon working
+       group, REFEDS, OpenID Foundation, IETF, OASIS, Kantara?
+
+  Q7.  [Resolved] Should SARM define a capabilities resource? Yes, and it
+       is now drafted as the Capability Exchange in §4.7. The need was
+       established by the asynchronous-processing and event-vocabulary work:
+       a Source System must be able to tell an Attestation Engine whether it
+       processes decisions asynchronously and which events it will emit. The
+       remaining open detail is shape and naming (e.g., whether
+       POST /sarm/v1/capabilities is the right form), not whether the
+       mechanism is needed.
+
+  Q8.  The BulkResponse structure (§5.3) is not yet defined; adopting
+       SCIM's shape (RFC 7644 §3.7), with per-operation status, is the
+       likely path. Are there Decision response edge cases beyond those
+       enumerated in §5.4 (e.g., partial batch failure reporting) that
+       need explicit treatment?
+
+  Q9.  Message signing (§11.6) is an optional, negotiated capability with
+       a handshake-pinned algorithm. Should SARM mandate a baseline
+       algorithm (e.g., ES256) that every signing implementation MUST
+       support, so that two parties that both choose to sign can always
+       negotiate a common one? Algorithm agility is desirable, but without
+       a mandatory floor two signing implementations could fail to find a
+       shared algorithm and silently fall back to no signing.
+
+
+--------------------------------------------------------------------------------
+13. NORMATIVE REFERENCES
+--------------------------------------------------------------------------------
+
+  [RFC2119]   Bradner, S., "Key words for use in RFCs to Indicate
+              Requirement Levels", BCP 14, RFC 2119, March 1997.
+
+  [RFC3339]   Klyne, G. and C. Newman, "Date and Time on the Internet:
+              Timestamps", RFC 3339, July 2002.
+
+  [RFC6750]   Jones, M. and D. Hardt, "The OAuth 2.0 Authorization
+              Framework: Bearer Token Usage", RFC 6750, October 2012.
+
+  [RFC7515]   Jones, M., Bradley, J., and N. Sakimura, "JSON Web Signature
+              (JWS)", RFC 7515, May 2015.
+
+  [RFC7519]   Jones, M., Bradley, J., and N. Sakimura, "JSON Web Token
+              (JWT)", RFC 7519, May 2015.
+
+  [RFC7643]   Hunt, P. et al., "System for Cross-domain Identity
+              Management: Core Schema", RFC 7643, September 2015.
+
+  [RFC7644]   Hunt, P. et al., "System for Cross-domain Identity
+              Management: Protocol", RFC 7644, September 2015.
+
+  [RFC8705]   Campbell, B. et al., "OAuth 2.0 Mutual-TLS Client
+              Authentication and Certificate-Bound Access Tokens",
+              RFC 8705, February 2020.
+
+  [RFC8785]   Rundgren, A., Jordan, B., and S. Erdtman, "JSON
+              Canonicalization Scheme (JCS)", RFC 8785, June 2020.
+
+  [SCIM]      Collectively: RFC 7642, RFC 7643, RFC 7644.
+
+
+--------------------------------------------------------------------------------
+APPENDIX A - ACKNOWLEDGEMENTS
+--------------------------------------------------------------------------------
+
+This draft is informed by extensive prior work in the identity and access
+governance community. The authors particularly acknowledge:
+
+  - The IETF SCIM working group, whose architectural model directly
+    influenced this draft.
+  - The InCommon Trusted Access Platform community (Internet2),
+    particularly the Grouper, Shibboleth, midPoint, and COmanage
+    project teams.
+  - Participants in the InCommon BaseCamp 2026 attestation discussion,
+    whose feedback shaped this revision.
+  - Practitioners across higher education and beyond who have
+    independently built and maintained the ad-hoc attestation
+    systems that motivate this work.
+
+
+--------------------------------------------------------------------------------
+APPENDIX B - EXAMPLE END-TO-END FLOW
+--------------------------------------------------------------------------------
+
+The following non-normative example illustrates a complete SARM
+interaction for an annual Grouper group attestation campaign. It uses the
+same ScopeItem shape as the §3.3 example.
+
+Step 1: AE discovers scope from Grouper (Source System).
+
+  The AE retrieves the items it cares about. Grouper-specific selection
+  (e.g., by stem) is expressed via the Grouper extension; a portable
+  alternative is to group/select by resourceId:
+
+  GET https://grouper.example.edu/sarm/v1/ScopeItems?
+      filter=resourceId eq "group:app:enterprise:finance-readers"
+
+  Response: a list of ScopeItems, one per (group, member) pair, each with
+  decisionOptions of keep_membership / remove_membership.
+
+Step 2: AE assigns certifiers and notifies via email.
+        (No SARM interaction. The campaign that drives this is internal
+        to the AE.)
+
+Step 3: User authenticates to a downstream SP. The IdP queries the AE:
+
+  GET https://arms.example.edu/sarm/v1/Intercept/check?
+      subject=msmith&audience=https://finance.example.edu
+
+  Response:
+  {
+    "action": "redirect_optional",
+    "redirectUrl": "https://arms.example.edu/attest/intercept/abc",
+    "message": "You have group memberships to review for Finance Readers."
+  }
+
+Step 4: IdP redirects user to AE for attestation. User completes
+        decisions, AE redirects back to IdP, SAML flow resumes.
+
+Step 5: AE notifies Grouper of decisions. Each "decision" value is one of
+        the options the ScopeItem declared:
+
+  POST https://grouper.example.edu/sarm/v1/Decisions
+  [
+    { "scopeItemId": "abc-123", "decision": "keep_membership",   ... },
+    { "scopeItemId": "abc-456", "decision": "remove_membership", ... }
+  ]
+
+Step 6: Grouper acts on the decisions internally and OPTIONALLY confirms:
+
+  POST https://arms.example.edu/webhooks/sarm
+  {
+    "type": "remediation.confirmed",
+    "data": { "scopeItemId": "abc-456", "appliedAt": "..." }
+  }
+
+
+================================================================================
+END OF DRAFT
+================================================================================
