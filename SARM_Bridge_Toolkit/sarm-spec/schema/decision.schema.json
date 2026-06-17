@@ -1,0 +1,65 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "SARM Decision",
+  "description": "Records the outcome of attestation for a single ScopeItem. Per §3.4. Schema URI: urn:ietf:params:sarm:schemas:core:1.0:Decision. A Decision is a transient notification, not a hosted resource — SARM defines no Decision retrieval endpoint.",
+  "type": "object",
+  "required": ["schemas", "scopeItemId", "decision", "certifierId", "decidedAt"],
+  "properties": {
+    "schemas": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "minItems": 1,
+      "description": "MUST contain the Decision core schema URI."
+    },
+    "id": {
+      "type": "string",
+      "description": "Unique identifier for this Decision within the Attestation Engine. Used as the idempotency key per §5.4."
+    },
+    "meta": {
+      "type": "object",
+      "properties": {
+        "resourceType": {
+          "type": "string",
+          "const": "Decision"
+        },
+        "created": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "additionalProperties": true
+    },
+    "scopeItemId": {
+      "type": "string",
+      "description": "ID of the ScopeItem this Decision applies to."
+    },
+    "decision": {
+      "type": "string",
+      "description": "The decision selected by the certifier. MUST exactly match one of the 'value' entries in the corresponding ScopeItem's decisionOptions. SARM does not define a fixed decision vocabulary."
+    },
+    "certifierId": {
+      "type": "string",
+      "description": "Identifier of the person who made the decision."
+    },
+    "decidedAt": {
+      "type": "string",
+      "format": "date-time",
+      "description": "RFC 3339 timestamp of when the decision was made."
+    },
+    "channel": {
+      "type": "string",
+      "description": "Informational. How the decision was captured. SARM defines NO channel vocabulary; this is an opaque string. Implementations MUST NOT branch on its value."
+    },
+    "comment": {
+      "type": "string",
+      "description": "Free-text comment from the certifier."
+    },
+    "delegatedFrom": {
+      "type": "string",
+      "description": "If the certifier was acting on behalf of another person."
+    }
+  },
+  "additionalProperties": false
+}

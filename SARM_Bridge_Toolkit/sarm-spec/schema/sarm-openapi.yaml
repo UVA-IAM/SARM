@@ -1,0 +1,304 @@
+openapi: "3.0.3"
+info:
+  title: SARM Interoperability API
+  description: |
+    System for Attestation and Recertification Management — Draft v0.3
+
+    This OpenAPI document covers the two in-scope protocol surfaces for the
+    SARM Interop Toolkit:
+
+      1. Scope Discovery (GET /sarm/v1/ScopeItems, GET /sarm/v1/ScopeItems/{id})
+      2. Decision Notification (POST /sarm/v1/Decisions)
+
+    Plus the Capability Exchange (POST /sarm/v1/capabilities).
+
+    Out of scope for this toolkit: Intercept Check (§6) and Event/Webhook (§7).
+
+    All endpoints MUST be authenticated and served over TLS 1.2+ (§8).
+  version: "0.3.0"
+  contact:
+    name: SARM Interop Toolkit
+    url: ""
+
+servers:
+  - url: https://{host}/sarm/v1
+    description: Production or dev endpoint
+    variables:
+      host:
+        default: source.example.edu
+        description: The Source System hostname.
+
+tags:
+  - name: discovery
+    description: Scope Discovery surface (§4)
+  - name: decisions
+    description: Decision Notification surface (§5)
+  - name: capabilities
+    description: Capability Exchange (§4.7)
+
+paths:
+  /ScopeItems:
+    get:
+      tags:
+        - discovery
+      summary: List ScopeItems
+      description: |
+        Retrieve the ScopeItems needing attestation from a Source System (§4.1).
+        Returns a paginated ListResponse. Supports SCIM-style filtering,
+        pagination, and attribute selection.
+      operationId: listScopeItems
+      parameters:
+        - name: filter
+          in: query
+          description: SCIM-style filter expression per §4.4
+          required: false
+          schema:
+            type: string
+        - name: startIndex
+          in: query
+          description: 1-based pagination index (default 1) per §4.2
+          required: false
+          schema:
+            type: integer
+            minimum: 1
+            default: 1
+        - name: count
+          in: query
+          description: Page size (default 100, max 1000) per §4.2
+          required: false
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 1000
+            default: 100
+        - name: attributes
+          in: query
+          description: Comma-separated list of attributes to return per §4.2
+          required: false
+          schema:
+            type: string
+      responses:
+        "200":
+          description: OK — ListResponse with ScopeItem resources
+          content:
+            "application/scim+json":
+              schema:
+                $ref: "#/components/schemas/ListResponse"
+        "400":
+          description: Bad Request — malformed filter or parameters
+          content:
+            "application/scim+json":
+              schema:
+                $ref: "#/components/schemas/Error"
+        "401":
+          description: Unauthorized — missing or invalid authentication
+        "5xx":
+          description: Server error — no SARM body (transport/infrastructure condition)
+
+  /ScopeItems/{itemId}:
+    get:
+      tags:
+        - discovery
+      summary: Retrieve a single ScopeItem
+      description: |
+        Retrieve one ScopeItem by its identifier (§4.5). Canonical retrieval
+        for the URL advertised in a ScopeItem's meta.location. Supports
+        conditional retrieval via If-None-Match (ETag) per §4.5.
+      operationId: getScopeItem
+      parameters:
+        - name: itemId
+          in: path
+          required: true
+          description: The ScopeItem's opaque id
+          schema:
+            type: string
+        - name: If-None-Match
+          in: header
+          description: ETag value from meta.version for conditional retrieval (§4.5)
+          required: false
+          schema:
+            type: string
+        - name: attributes
+          in: query
+          description: Comma-separated list of attributes to return
+          required: false
+          schema:
+            type: string
+      responses:
+        "200":
+          description: OK — ScopeItem representation
+          content:
+            "application/scim+json":
+              schema:
+                $ref: "#/components/schemas/ScopeItem"
+        "304":
+          description: Not Modified — the item's meta.version matches If-None-Match
+          headers:
+            ETag:
+              schema:
+                type: string
+              description: The ScopeItem's meta.version
+        "400":
+          description: Bad Request — malformed request
+          content:
+            "application/scim+json":
+              schema:
+                $ref: "#/components/schemas/Error"
+        "404":
+          description: |
+            Not Found — with a SARM Error body, scimType "noSuchScopeItem".
+            The item is not in scope (may have left scope since last discovery).
+            Per the body-authoritative rule (§10), this is an authoritative
+            "not in scope" answer. A 404 with no SARM body means SARM did not
+            answer (transport condition).
+          content:
+            "application/scim+json":
+              schema:
+                $ref: "#/components/schemas/Error"
+        "401":
+          description: Unauthorized — missing or invalid authentication
+
+  /Decisions:
+    post:
+      tags:
+        - decisions
+      summary: Submit one or more decisions
+      description: |
+        Notify the Source System of recorded certifier decisions (§5.1).
+        Accepts a single Decision resource or a batch BulkRequest.
+        The Source System responds with a status code describing what it did
+        per §5.4.
+      operationId: submitDecisions
+      requestBody:
+        required: true
+        content:
+          "application/scim+json":
+            schema:
+              oneOf:
+                - $ref: "#/components/schemas/Decision"
+                - $ref: "#/components/schemas/BulkRequest"
+          "application/json":
+            schema:
+              oneOf:
+                - $ref: "#/components/schemas/Decision"
+                - $ref: "#/components/schemas/BulkRequest"
+      responses:
+        "201":
+          description: |
+            Created — first-time record of this Decision. The Source System
+            has accepted and recorded it synchronously (§5.4).
+          headers:
+            Location:
+              schema:
+                type: string
+                format: uri
+              description: URI of the created Decision resource
+        "200":
+          description: |
+            OK — idempotent replay. This Decision id was already recorded.
+            Returns the existing Decision unchanged (§5.4).
+          content:
+            "application/scim+json":
+              schema:
+                $ref: "#/components/schemas/Decision"
+        "202":
+          description: |
+            Accepted — the Source System will act asynchronously (§5.4).
+            The Attestation Engine marks the item submitted and awaits a
+            completion event (e.g., remediation.confirmed).
+          headers:
+            Location:
+              schema:
+                type: string
+                format: uri
+        "400":
+          description: |
+            Bad Request — the Decision is malformed or carries an undeclared
+            decision value (§5.5).
+          content:
+            "application/scim+json":
+              schema:
+                $ref: "#/components/schemas/Error"
+        "401":
+          description: Unauthorized — missing or invalid authentication
+        "409":
+          description: |
+            Conflict — the request conflicts with existing state (§5.4):
+            (a) same Decision id reused with a different body, or
+            (b) a new Decision would supersede an existing one and the
+            Source System does not permit supersession.
+          content:
+            "application/scim+json":
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /capabilities:
+    post:
+      tags:
+        - capabilities
+      summary: Capability Exchange
+      description: |
+        Establish how the two parties will interact (§4.7). Configuration-time
+        handshake, not a per-request call. The Attestation Engine sends its
+        capabilities; the Source System responds with its own.
+      operationId: exchangeCapabilities
+      requestBody:
+        required: true
+        content:
+          "application/json":
+            schema:
+              $ref: "#/components/schemas/Capabilities"
+      responses:
+        "200":
+          description: OK — the Source System's capabilities
+          content:
+            "application/json":
+              schema:
+                $ref: "#/components/schemas/Capabilities"
+        "400":
+          description: Bad Request — malformed capability request
+          content:
+            "application/json":
+              schema:
+                $ref: "#/components/schemas/Error"
+        "401":
+          description: Unauthorized — missing or invalid authentication
+
+components:
+  schemas:
+
+    # ── Core resource schemas ──
+
+    ScopeItem:
+      $ref: "./scope-item.schema.json"
+
+    Decision:
+      $ref: "./decision.schema.json"
+
+    Error:
+      $ref: "./error.schema.json"
+
+    ListResponse:
+      $ref: "./list-response.schema.json"
+
+    BulkRequest:
+      $ref: "./bulk-request.schema.json"
+
+    Capabilities:
+      $ref: "./capabilities.schema.json"
+
+    Event:
+      $ref: "./event.schema.json"
+
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      description: |
+        SARM is auth-agnostic (§8). Any authentication mechanism agreed
+        between the parties is acceptable: OAuth 2.0 Bearer Tokens [RFC6750],
+        Mutual TLS [RFC8705], or (for testing only) HTTP Basic Auth over TLS.
+        This example uses Bearer tokens.
+
+security:
+  - bearerAuth: []

@@ -1,0 +1,112 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "SARM ScopeItem",
+  "description": "One atomic attestation task: a single Certifier answering a single question about a single Subject. Per §3.3. Schema URI: urn:ietf:params:sarm:schemas:core:1.0:ScopeItem",
+  "type": "object",
+  "required": ["schemas", "id", "subjectId", "subjectLabel", "certifierHint", "decisionOptions"],
+  "properties": {
+    "schemas": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "minItems": 1,
+      "description": "MUST contain the ScopeItem core schema URI as the first entry. Subsequent entries identify extension schemas."
+    },
+    "id": {
+      "type": "string",
+      "description": "Unique identifier for this ScopeItem within the Source System. Opaque token per §3.1.1."
+    },
+    "meta": {
+      "type": "object",
+      "required": ["resourceType"],
+      "properties": {
+        "resourceType": {
+          "type": "string",
+          "const": "ScopeItem"
+        },
+        "created": {
+          "type": "string",
+          "format": "date-time",
+          "description": "RFC 3339 timestamp of creation."
+        },
+        "lastModified": {
+          "type": "string",
+          "format": "date-time",
+          "description": "RFC 3339 timestamp of last modification."
+        },
+        "version": {
+          "type": "string",
+          "description": "HTTP ETag value for conditional requests per §4.5."
+        },
+        "location": {
+          "type": "string",
+          "format": "uri",
+          "description": "URI at which this ScopeItem can be retrieved individually per §4.5."
+        }
+      },
+      "additionalProperties": true
+    },
+    "subjectId": {
+      "type": "string",
+      "description": "Identifier of the subject of the question in the Source System. Opaque token per §3.1.1."
+    },
+    "subjectLabel": {
+      "type": "string",
+      "description": "Human-readable label for the subject, for presentation to the certifier."
+    },
+    "certifierHint": {
+      "type": "string",
+      "description": "Suggested certifier (external id). The Attestation Engine MAY override certifier resolution. Opaque token per §3.1.1."
+    },
+    "decisionOptions": {
+      "type": "array",
+      "minItems": 1,
+      "description": "Ordered, non-empty list of the decisions the Source System will accept for this item. Owned entirely by the Source System per §3.3.1.",
+      "items": {
+        "type": "object",
+        "required": ["value", "label"],
+        "properties": {
+          "value": {
+            "type": "string",
+            "description": "Machine-readable decision key returned to the Source System in a Decision."
+          },
+          "label": {
+            "type": "string",
+            "description": "Human-readable text for presenting this option to the certifier."
+          }
+        },
+        "additionalProperties": false
+      }
+    },
+    "resourceId": {
+      "type": "string",
+      "description": "Opaque grouping key. ScopeItems sharing a resourceId MAY be presented together by the Attestation Engine. Equivalence key only; never returned in a Decision. Omit when the item does not belong to a group. Per §3.1.1."
+    },
+    "resourceLabel": {
+      "type": "string",
+      "description": "Human-readable label for the grouping, for presentation only. Meaningful only when resourceId is present."
+    },
+    "decisionPrompt": {
+      "type": "string",
+      "description": "Source-System-defined prompt to present alongside the decision options. The Attestation Engine MAY override or supply its own."
+    },
+    "contextData": {
+      "type": "object",
+      "description": "Additional metadata to display to the certifier (last access time, role description, justification, etc.). Source Systems MAY include arbitrary keys. For human display only, not protocol behavior."
+    }
+  },
+  "additionalProperties": false,
+  "allOf": [
+    {
+      "if": {
+        "properties": { "resourceId": { "type": "exists" } }
+      },
+      "then": {
+        "properties": {
+          "resourceLabel": { "type": "string" }
+        }
+      }
+    }
+  ]
+}

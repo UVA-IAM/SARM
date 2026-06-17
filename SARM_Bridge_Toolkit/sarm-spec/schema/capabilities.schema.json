@@ -1,0 +1,73 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "SARM Capabilities",
+  "description": "Capability Exchange message per §4.7. POST /sarm/v1/capabilities establishes how the two parties will interact. Schema URI: urn:ietf:params:sarm:api:messages:1.0:Capabilities",
+  "type": "object",
+  "required": ["schemas", "role"],
+  "properties": {
+    "schemas": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "const": "urn:ietf:params:sarm:api:messages:1.0:Capabilities"
+      },
+      "minItems": 1
+    },
+    "role": {
+      "type": "string",
+      "enum": ["attestationEngine", "sourceSystem"],
+      "description": "Which party this capability declaration describes."
+    },
+    "returnChannel": {
+      "type": "object",
+      "description": "Where the Source System may deliver events and async completions. Presence signals async capability. Absence means synchronous-only; the Source System MUST NOT return 202 per §4.7."
+    },
+    "conformanceLevel": {
+      "type": "integer",
+      "enum": [1, 2, 3],
+      "description": "Source System conformance level per §4.6. Only present in sourceSystem responses."
+    },
+    "supportsAsync": {
+      "type": "boolean",
+      "description": "Whether the Source System processes decisions asynchronously (returns 202). Only present in sourceSystem responses."
+    },
+    "supportsConditionalGet": {
+      "type": "boolean",
+      "description": "Whether the Source System honors If-None-Match conditional requests per §4.5. Only present in sourceSystem responses."
+    },
+    "events": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "description": "Event types this Source System will emit. Source-System-determined strings declared through the capability exchange. A consumer MUST ignore types it does not recognize per §7.2."
+    },
+    "signing": {
+      "type": "object",
+      "description": "Message signing configuration per §11.6 and §4.7. Bidirectional: Source System signs ScopeItems and events; Attestation Engine signs Decisions.",
+      "properties": {
+        "signs": {
+          "type": "boolean",
+          "description": "Whether this party signs the messages it sends."
+        },
+        "requiresPeerSignatures": {
+          "type": "boolean",
+          "description": "Whether this party requires the peer to sign messages."
+        },
+        "algorithms": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Signing algorithm(s) this party uses (e.g., ES256)."
+        },
+        "key": {
+          "description": "Public key, carried inline or referenced. See §11.6."
+        }
+      },
+      "additionalProperties": true
+    }
+  },
+  "additionalProperties": true,
+  "description": "The set of capability fields is illustrative and extensible; a party MUST ignore capability fields it does not recognize per §4.7."
+}

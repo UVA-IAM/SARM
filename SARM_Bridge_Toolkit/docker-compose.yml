@@ -1,0 +1,51 @@
+# SARM Interop Toolkit — Docker Compose
+# Brings up the bridge with sample data (zero external dependencies).
+#
+# Docker Swarm (recommended for production):
+#   docker stack deploy -c docker-compose.yml sarm
+#   docker service ls --filter name=sarm
+#   docker config rm sarm_bridge_config   # clean up after stack removal
+#
+# Docker Compose (local dev only):
+#   docker compose up --build    # build and start locally
+#   docker compose down           # stop and remove containers
+#
+# Note: docker stack deploy does not support `build:` — the image must be
+# pre-built and pushed to a registry (or present on all Swarm nodes).
+# For local dev without a registry, use `docker compose up` instead.
+
+services:
+  bridge:
+    # docker stack deploy does not support `build:` — use `docker compose up --build`
+    # for local development, or pre-build and push the image to a registry.
+    image: sarm-ss-bridge:latest
+    ports:
+      - "8080:8000"
+    configs:
+      - source: sarm_bridge_config
+        target: /app/config.yaml
+    volumes:
+      # Persist seed data across restarts (config is from Docker Config)
+      - bridge-data:/app/data
+    environment:
+      - SARM_DATABASE_URL=sqlite:////app/data/sample.sqlite
+      - SARM_CONFIG=/app/config.yaml
+      # Decision behaviour — override via env var or config.yaml
+      - SARM_DECISIONS_SYNC_MODE=async
+      - SARM_DECISIONS_REPLAY_DISPOSITION=disallow
+      - SARM_DECISIONS_DRY_RUN=false
+      - UVICORN_HOST=0.0.0.0
+      - UVICORN_PORT=8000
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 10s
+      timeout: 3s
+      retries: 3
+      start_period: 5s
+
+configs:
+  sarm_bridge_config:
+    file: ./sarm-ss-bridge/config.example.yaml
+
+volumes:
+  bridge-data:

@@ -1,0 +1,981 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>SARM Inspector</title>
+<style>
+/* ===== Reset & base ===== */
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+html { font-size: 14px; }
+body {
+  font-family: -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  background: #f5f6f8; color: #1a1a2e; line-height: 1.5;
+  padding: 0 16px;
+}
+h1 { font-size: 1.5rem; font-weight: 600; margin: 0 0 4px; }
+h2 { font-size: 1.15rem; font-weight: 600; margin-bottom: 8px; }
+h3 { font-size: 1rem; font-weight: 600; margin-bottom: 6px; }
+a { color: #2563eb; }
+
+/* ===== Layout ===== */
+.container { max-width: 960px; margin: 0 auto; padding: 20px 0; }
+.panel {
+  background: #fff; border: 1px solid #d1d5db; border-radius: 6px;
+  padding: 16px; margin-bottom: 16px;
+}
+.panel-header {
+  display: flex; align-items: center; justify-content: space-between;
+  margin-bottom: 12px;
+}
+
+/* ===== Config form ===== */
+#config-view .banner {
+  background: #fef3c7; border: 1px solid #f59e0b; border-radius: 4px;
+  padding: 8px 12px; font-size: 0.85rem; color: #92400e; margin-bottom: 12px;
+}
+.form-row { display: flex; gap: 10px; align-items: flex-end; flex-wrap: wrap; }
+.form-group { display: flex; flex-direction: column; flex: 1; min-width: 200px; }
+.form-group label { font-size: 0.8rem; font-weight: 600; color: #4b5563; margin-bottom: 2px; }
+.form-group input, .form-group select {
+  padding: 6px 10px; border: 1px solid #d1d5db; border-radius: 4px;
+  font-size: 0.9rem; font-family: "SF Mono", "Fira Code", "Cascadia Code", monospace;
+}
+
+/* Token input wrapper: input + toggle/copy buttons */
+.token-wrap {
+  display: flex; gap: 4px; align-items: center;
+}
+.token-wrap input { flex: 1; min-width: 0; }
+.token-wrap .token-btn {
+  padding: 5px 8px; border: 1px solid #d1d5db; border-radius: 4px;
+  background: #fff; cursor: pointer; font-size: 0.85rem; color: #4b5563;
+  line-height: 1; white-space: nowrap;
+}
+.token-wrap .token-btn:hover { background: #f9fafb; border-color: #9ca3af; }
+.token-wrap .token-btn:focus-visible { outline: 2px solid #2563eb; outline-offset: 1px; }
+.token-wrap .token-btn.copied { color: #16a34a; border-color: #16a34a; }
+.form-group input:focus, .form-group select:focus { outline: none; border-color: #2563eb; box-shadow: 0 0 0 2px rgba(37,99,235,0.15); }
+
+/* ===== Buttons ===== */
+button, .btn {
+  display: inline-flex; align-items: center; justify-content: center;
+  padding: 7px 16px; border: 1px solid #d1d5db; border-radius: 4px;
+  font-size: 0.85rem; font-weight: 500; cursor: pointer;
+  background: #fff; color: #1a1a2e; white-space: nowrap;
+  text-decoration: none;
+}
+button:hover, .btn:hover { background: #f9fafb; border-color: #9ca3af; }
+button:focus-visible, .btn:focus-visible { outline: 2px solid #2563eb; outline-offset: 1px; }
+.btn-primary { background: #2563eb; color: #fff; border-color: #2563eb; }
+.btn-primary:hover { background: #1d4ed8; }
+.btn-sm { padding: 4px 10px; font-size: 0.8rem; }
+.btn-danger { background: #dc2626; color: #fff; border-color: #dc2626; }
+.btn-danger:hover { background: #b91c1c; }
+.btn:disabled { opacity: 0.5; cursor: not-allowed; }
+
+/* ===== Toggle ===== */
+.toggle-group {
+  display: flex; align-items: center; gap: 8px; font-size: 0.85rem;
+}
+.toggle-group input[type="checkbox"] { width: 16px; height: 16px; cursor: pointer; }
+.toggle-group label { cursor: pointer; }
+
+/* ===== Table ===== */
+.table-wrap { overflow-x: auto; }
+table { width: 100%; border-collapse: collapse; font-size: 0.85rem; }
+thead th {
+  text-align: left; padding: 8px 10px; background: #f9fafb;
+  border-bottom: 2px solid #d1d5db; font-weight: 600; color: #374151;
+  white-space: nowrap;
+}
+tbody td {
+  padding: 8px 10px; border-bottom: 1px solid #e5e7eb; vertical-align: top;
+}
+tbody tr:hover { background: #f0f7ff; cursor: pointer; }
+tbody tr.selected { background: #dbeafe; }
+td.id-col { font-family: "SF Mono", "Fira Code", monospace; font-size: 0.8rem; color: #6b7280; }
+td.label-col { max-width: 260px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+td.options-col { font-size: 0.8rem; }
+.badge {
+  display: inline-block; padding: 1px 7px; border-radius: 10px;
+  font-size: 0.75rem; font-weight: 500;
+}
+.badge-info { background: #dbeafe; color: #1e40af; }
+.badge-warn { background: #fef3c7; color: #92400e; }
+
+/* ===== Detail view ===== */
+.detail-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px 16px; }
+.detail-grid .field-label { font-size: 0.8rem; font-weight: 600; color: #6b7280; }
+.detail-grid .field-value { font-size: 0.9rem; }
+.detail-grid .field-value.mono {
+  font-family: "SF Mono", "Fira Code", monospace; font-size: 0.82rem;
+}
+.context-block {
+  background: #f9fafb; border: 1px solid #e5e7eb; border-radius: 4px;
+  padding: 8px 10px; margin-top: 8px;
+}
+.context-block pre {
+  font-family: "SF Mono", "Fira Code", monospace; font-size: 0.8rem;
+  white-space: pre-wrap; margin: 0; color: #374151;
+}
+
+/* ===== Decision form ===== */
+.decision-form { margin-top: 16px; }
+.decision-form select, .decision-form textarea {
+  width: 100%; padding: 6px 10px; border: 1px solid #d1d5db; border-radius: 4px;
+  font-size: 0.9rem; font-family: inherit;
+}
+.decision-form textarea {
+  resize: vertical; min-height: 60px; margin-top: 8px;
+}
+.decision-form .form-row { margin-top: 8px; }
+
+/* ===== Accordions (traffic log) ===== */
+.accordion { margin-bottom: 6px; border: 1px solid #d1d5db; border-radius: 4px; overflow: hidden; }
+.accordion-header {
+  display: flex; align-items: center; gap: 8px; padding: 8px 12px;
+  background: #f9fafb; cursor: pointer; font-size: 0.85rem; user-select: none;
+}
+.accordion-header:hover { background: #f0f1f3; }
+.accordion-header .arrow { font-size: 0.7rem; transition: transform 0.15s; color: #6b7280; }
+.accordion-header.open .arrow { transform: rotate(90deg); }
+.accordion-body { display: none; background: #fff; }
+.accordion-body.open { display: block; }
+.accordion-body pre {
+  margin: 0; padding: 10px 12px; font-size: 0.8rem;
+  font-family: "SF Mono", "Fira Code", monospace; overflow-x: auto;
+  white-space: pre-wrap; word-break: break-all;
+}
+.status-ok { color: #16a34a; font-weight: 600; }
+.status-err { color: #dc2626; font-weight: 600; }
+
+/* ===== Status bar ===== */
+.status-bar {
+  display: flex; align-items: center; gap: 10px; font-size: 0.82rem;
+  color: #6b7280; margin-bottom: 12px;
+}
+.status-bar .status-dot { width: 8px; height: 8px; border-radius: 50%; }
+.status-dot.ok { background: #16a34a; }
+.status-dot.err { background: #dc2626; }
+.status-dot.idle { background: #9ca3af; }
+
+/* ===== Utility ===== */
+.hidden { display: none !important; }
+.mt-8 { margin-top: 8px; }
+.mt-16 { margin-top: 16px; }
+.mb-8 { margin-bottom: 8px; }
+.text-muted { color: #6b7280; }
+.text-sm { font-size: 0.82rem; }
+.flex-between { display: flex; align-items: center; justify-content: space-between; }
+.flex-gap { display: flex; align-items: center; gap: 10px; }
+.flex-wrap { flex-wrap: wrap; }
+.chip {
+  display: inline-block; padding: 2px 8px; border-radius: 10px;
+  font-size: 0.75rem; background: #f3f4f6; color: #374151;
+  margin: 1px 2px;
+}
+.loading { color: #6b7280; font-style: italic; }
+.error-msg { color: #dc2626; background: #fef2f2; border: 1px solid #fecaca; padding: 8px 12px; border-radius: 4px; font-size: 0.85rem; }
+
+/* ===== Back button ===== */
+.back-link {
+  display: inline-flex; align-items: center; gap: 4px;
+  font-size: 0.85rem; color: #6b7280; text-decoration: none;
+  cursor: pointer; margin-bottom: 12px;
+}
+.back-link:hover { color: #2563eb; }
+
+/* ===== Pagination ===== */
+.pagination { display: flex; align-items: center; gap: 8px; margin-top: 12px; }
+.pagination span { font-size: 0.82rem; color: #6b7280; }
+
+/* ===== Responsive ===== */
+@media (max-width: 640px) {
+  .detail-grid { grid-template-columns: 1fr; }
+  .form-row { flex-direction: column; }
+  .form-group { min-width: 100%; }
+}
+</style>
+</head>
+<body>
+<div class="container">
+
+  <!-- ============================================================
+       VIEW: Config
+       ============================================================ -->
+  <div id="config-view">
+    <h1>SARM Inspector</h1>
+    <p class="text-muted text-sm mb-8">
+      Protocol demonstrator — discover ScopeItems, send Decisions.
+      Conforms to SARM draft v0.3.
+    </p>
+
+    <div class="panel">
+      <div class="banner">
+        <strong>Auth:</strong> Bearer token only — this is a protocol demonstrator, not an auth reference.
+        SARM is auth-agnostic. Tokens are stored in memory only and never sent outside the requested endpoint.
+      </div>
+      <div class="form-row">
+        <div class="form-group" style="flex:2">
+          <label for="cfg-base">Base URL</label>
+          <input id="cfg-base" type="url" placeholder="http://localhost:8080" autocomplete="off">
+        </div>
+        <div class="form-group" style="flex:1">
+          <label for="cfg-token">Bearer Token</label>
+          <div class="token-wrap">
+            <input id="cfg-token" type="password" placeholder="(if required)" autocomplete="off">
+            <button type="button" id="btn-toggle-token" class="token-btn" title="Show/hide token" aria-label="Toggle token visibility">𝨚</button>
+            <button type="button" id="btn-copy-token" class="token-btn" title="Copy token" aria-label="Copy token">Copy</button>
+          </div>
+        </div>
+      </div>
+      <div class="form-row mt-8">
+        <button id="btn-capabilities" class="btn">Exchange Capabilities</button>
+        <button id="btn-discover" class="btn-primary">Discover ScopeItems</button>
+        <span class="text-sm text-muted" id="cfg-status"></span>
+      </div>
+      <div class="form-row mt-8">
+        <div class="toggle-group">
+          <input type="checkbox" id="chk-return-channel">
+          <label for="chk-return-channel">Include returnChannel (dict)</label>
+        </div>
+        <button id="btn-toggle-cap-body" class="btn-sm">Edit Capabilities Request Body</button>
+      </div>
+      <div id="cfg-cap-body-editor" class="hidden mt-8">
+        <label class="text-sm" style="font-weight:600;color:#4b5563">POST body (JSON) — <code>POST /sarm/v1/capabilities</code></label>
+        <textarea id="cfg-cap-body-text" rows="6" style="width:100%;font-family:'SF Mono','Fira Code','Cascadia Code',monospace;font-size:0.82rem;padding:8px;border:1px solid #d1d5db;border-radius:4px;resize:vertical"></textarea>
+      </div>
+      <div id="cfg-capabilities" class="hidden mt-8">
+        <div class="accordion">
+          <div class="accordion-header">
+            <span class="arrow">&rsaquo;</span>
+            <span>Capabilities Response</span>
+          </div>
+          <div class="accordion-body">
+            <pre id="cfg-capabilities-body"></pre>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Collapsed traffic log (always accessible) -->
+    <div class="panel hidden" id="config-traffic-toggle">
+      <button id="btn-show-traffic-config" class="btn-sm">Show Traffic Log</button>
+    </div>
+    <div id="config-traffic-log" class="hidden"></div>
+  </div>
+
+  <!-- ============================================================
+       VIEW: Scope Items List
+       ============================================================ -->
+  <div id="list-view" class="hidden">
+    <a class="back-link" id="btn-back-config">&larr; Change endpoint</a>
+    <div class="flex-between">
+      <h2>ScopeItems</h2>
+      <div class="flex-gap">
+        <span class="text-sm text-muted" id="list-count"></span>
+        <button id="btn-refresh" class="btn-sm">Refresh</button>
+        <button id="btn-show-traffic-list" class="btn-sm">Traffic Log</button>
+      </div>
+    </div>
+    <div class="status-bar">
+      <span class="status-dot idle" id="list-dot"></span>
+      <span id="list-status">Ready</span>
+    </div>
+    <div class="panel hidden" id="list-error"></div>
+    <div class="table-wrap">
+      <table id="items-table">
+        <thead>
+          <tr>
+            <th style="width:110px">ID</th>
+            <th>Subject</th>
+            <th style="width:130px">Certifier</th>
+            <th style="width:200px">Decision Options</th>
+          </tr>
+        </thead>
+        <tbody id="items-tbody"></tbody>
+      </table>
+    </div>
+    <div id="list-pagination" class="pagination hidden"></div>
+    <!-- Traffic log container (hidden by default) -->
+    <div id="list-traffic-log" class="hidden mt-16"></div>
+  </div>
+
+  <!-- ============================================================
+       VIEW: Item Detail
+       ============================================================ -->
+  <div id="detail-view" class="hidden">
+    <a class="back-link" id="btn-back-list">&larr; Back to ScopeItems</a>
+    <h2>ScopeItem Detail</h2>
+    <div class="status-bar">
+      <span class="status-dot idle" id="detail-dot"></span>
+      <span id="detail-status">Ready</span>
+    </div>
+    <div class="panel">
+      <div class="detail-grid" id="detail-grid"></div>
+      <div id="detail-context" class="context-block hidden">
+        <h3>Context Data</h3>
+        <pre id="detail-context-pre"></pre>
+      </div>
+    </div>
+
+    <!-- Decision form -->
+    <div class="panel decision-form">
+      <h3>Submit Decision</h3>
+      <div class="form-row">
+        <div class="form-group" style="flex:2">
+          <label for="dec-select">Decision</label>
+          <select id="dec-select"><option value="">&mdash; select &mdash;</option></select>
+        </div>
+        <div class="form-group" style="flex:1">
+          <label for="dec-certifier">Certifier ID</label>
+          <input id="dec-certifier" type="text" placeholder="user:msmith">
+        </div>
+        <div class="form-group" style="flex:1">
+          <label for="dec-channel">Channel</label>
+          <select id="dec-channel">
+            <option value="web">web</option>
+            <option value="email">email</option>
+            <option value="intercept">intercept</option>
+            <option value="bulk">bulk</option>
+            <option value="default_action">default_action</option>
+          </select>
+        </div>
+      </div>
+      <textarea id="dec-comment" placeholder="Comment (optional)"></textarea>
+      <div class="form-row mt-8">
+        <div class="toggle-group">
+          <input type="checkbox" id="chk-dryrun" checked>
+          <label for="chk-dryrun">Dry-run (preview only)</label>
+        </div>
+        <button id="btn-send-decision" class="btn-primary">Send Decision</button>
+      </div>
+    </div>
+
+    <!-- Decision result -->
+    <div id="decision-result" class="hidden"></div>
+
+    <!-- Traffic log -->
+    <div id="detail-traffic-log" class="hidden mt-16"></div>
+    <div class="mt-8">
+      <button id="btn-show-traffic-detail" class="btn-sm">Show Traffic Log</button>
+    </div>
+  </div>
+
+</div>
+
+<script>
+/* ==================================================================
+   SARM Inspector — single-file vanilla JS, no dependencies.
+   Conforms to SARM draft v0.3.
+
+   Surfaces used:
+     POST /sarm/v1/capabilities   — Capability Exchange (§4.7)
+     GET  /sarm/v1/ScopeItems     — Scope Discovery (§4)
+     POST /sarm/v1/Decisions      — Decision Notification (§5)
+   ================================================================== */
+
+// ---- State ----
+const state = {
+  baseUrl: '',       // e.g. http://localhost:8080
+  token: '',
+  scopeItems: [],    // current page of ScopeItem[]
+  listResponse: null,// full ListResponse
+  currentItem: null, // selected ScopeItem
+  currentPage: 1,
+  totalCount: 0,
+  traffic: [],       // { label, request, response }
+  trafficVisible: false,
+  capabilities: null,// SS capabilities (from /Capabilities)
+  // Decision id reused for idempotency (SARM §5.4): the AE reuses the
+  // same decision id on retries so the SS can recognise replays (200 OK)
+  // rather than recording duplicates (201 Created).
+  lastDecisionId: null,
+};
+
+// ---- DOM shortcuts ----
+const $ = (sel) => document.querySelector(sel);
+const hide = (el) => el.classList.add('hidden');
+const show = (el) => el.classList.remove('hidden');
+
+// ---- View management ----
+function showView(id) {
+  ['config-view', 'list-view', 'detail-view'].forEach(v => {
+    document.getElementById(v).classList.toggle('hidden', v !== id);
+  });
+}
+
+// ---- HTTP helpers ----
+async function httpFetch(path, options = {}) {
+  const url = state.baseUrl.replace(/\/+$/, '') + path;
+  const headers = { 'Accept': 'application/scim+json' };
+  if (state.token) {
+    headers['Authorization'] = 'Bearer ' + state.token;
+  }
+  if (options.body && !(options.body instanceof FormData)) {
+    headers['Content-Type'] = 'application/scim+json';
+    options.body = JSON.stringify(options.body);
+  }
+  Object.assign(headers, options.headers || {});
+  options.headers = headers;
+
+  const req = { method: 'GET', ...options };
+  if (options.body) req.body = options.body;
+
+  const reqDump = { method: req.method, url, headers: { ...req.headers } };
+  // Mask token in traffic log
+  if (reqDump.headers['Authorization']) {
+    reqDump.headers['Authorization'] = 'Bearer ***';
+  }
+
+  const t0 = performance.now();
+  let resDump;
+  try {
+    const resp = await fetch(url, req);
+    const ms = (performance.now() - t0).toFixed(0);
+    const text = await resp.text();
+    let body;
+    try { body = JSON.parse(text); } catch { body = text; }
+    resDump = { status: resp.status, statusText: resp.statusText, body, ms, raw: text };
+
+    state.traffic.push({
+      label: `${req.method} ${path}`,
+      request: reqDump,
+      response: resDump,
+    });
+    renderTraffic();
+    return { ok: resp.ok, status: resp.status, body };
+  } catch (err) {
+    const ms = (performance.now() - t0).toFixed(0);
+    resDump = { error: err.message, ms };
+    state.traffic.push({
+      label: `${req.method} ${path}`,
+      request: reqDump,
+      response: resDump,
+    });
+    renderTraffic();
+    throw err;
+  }
+}
+
+// ---- Traffic log rendering ----
+function escapeHtml(s) {
+  if (typeof s !== 'string') s = String(s ?? '');
+  const d = document.createElement('div');
+  d.textContent = s;
+  return d.innerHTML;
+}
+
+function renderTraffic() {
+  const containers = [
+    $('#config-traffic-log'),
+    $('#list-traffic-log'),
+    $('#detail-traffic-log'),
+  ];
+  const html = state.traffic.map((t, i) => {
+    const statusClass = (t.response.status && t.response.status >= 400) ? 'status-err' : 'status-ok';
+    const statusText = t.response.status
+      ? `${t.response.status} ${t.response.statusText || ''} (${t.response.ms}ms)`
+      : `Error (${t.response.ms}ms)`;
+    const bodyStr = typeof t.response.body === 'string'
+      ? escapeHtml(t.response.body)
+      : escapeHtml(JSON.stringify(t.response.body, null, 2));
+    return `
+      <div class="accordion">
+        <div class="accordion-header" data-idx="${i}">
+          <span class="arrow">&rsaquo;</span>
+          <span>${escapeHtml(t.label)}</span>
+          <span class="${statusClass}" style="margin-left:auto;font-size:0.8rem">${statusText}</span>
+        </div>
+        <div class="accordion-body">
+          <div style="padding:6px 12px 0;font-size:0.8rem;font-weight:600;color:#6b7280">REQUEST</div>
+          <pre>${escapeHtml(JSON.stringify(t.request, null, 2))}</pre>
+          <div style="padding:6px 12px 0;font-size:0.8rem;font-weight:600;color:#6b7280">RESPONSE</div>
+          <pre>${bodyStr}</pre>
+        </div>
+      </div>`;
+  }).join('');
+
+  containers.forEach(c => { if (c) c.innerHTML = html; });
+}
+
+function toggleTraffic() {
+  state.trafficVisible = !state.trafficVisible;
+  ['config-traffic-log', 'list-traffic-log', 'detail-traffic-log'].forEach(id => {
+    const el = document.getElementById(id);
+    if (el) state.trafficVisible ? show(el) : hide(el);
+  });
+  // Update toggle buttons
+  ['btn-show-traffic-config', 'btn-show-traffic-list', 'btn-show-traffic-detail'].forEach(id => {
+    const el = document.getElementById(id);
+    if (el) el.textContent = state.trafficVisible ? 'Hide Traffic Log' : 'Show Traffic Log';
+  });
+}
+
+// ---- Accordion handlers (event delegation) ----
+document.addEventListener('click', (e) => {
+  const header = e.target.closest('.accordion-header');
+  if (header) {
+    header.classList.toggle('open');
+    header.nextElementSibling.classList.toggle('open');
+    return;
+  }
+});
+
+// ---- Token visibility toggle ----
+let tokenVisible = false;
+$('#btn-toggle-token').addEventListener('click', () => {
+  const input = $('#cfg-token');
+  tokenVisible = !tokenVisible;
+  input.type = tokenVisible ? 'text' : 'password';
+  $('#btn-toggle-token').textContent = tokenVisible ? '𝨕' : '𝨚';
+  $('#btn-toggle-token').title = tokenVisible ? 'Hide token' : 'Show token';
+});
+
+// ---- Copy token to clipboard ----
+$('#btn-copy-token').addEventListener('click', () => {
+  const input = $('#cfg-token');
+  const token = input.value;
+  if (!token) return;
+  navigator.clipboard.writeText(token).then(() => {
+    const btn = $('#btn-copy-token');
+    btn.classList.add('copied');
+    btn.textContent = '✓';
+    setTimeout(() => {
+      btn.classList.remove('copied');
+      btn.textContent = 'Copy';
+    }, 1500);
+  });
+});
+
+// ---- Config view ----
+$('#btn-discover').addEventListener('click', async () => {
+  const base = $('#cfg-base').value.replace(/\/+$/, '');
+  const token = $('#cfg-token').value;
+  if (!base) { alert('Enter a base URL.'); return; }
+  state.baseUrl = base;
+  state.token = token;
+  state.traffic = [];
+  state.scopeItems = [];
+  state.currentItem = null;
+
+  const statusEl = $('#cfg-status');
+  statusEl.textContent = 'Discovering…';
+
+  try {
+    const path = '/sarm/v1/ScopeItems?startIndex=1&count=25';
+    const { body, status } = await httpFetch(path);
+    if (!body || !body.Resources) {
+      statusEl.textContent = `Unexpected response (${status}).`;
+      statusEl.style.color = '#dc2626';
+      return;
+    }
+    state.listResponse = body;
+    state.scopeItems = body.Resources;
+    state.currentPage = body.startIndex || 1;
+    state.totalCount = body.totalResults || body.Resources.length;
+    showListView();
+  } catch (err) {
+    statusEl.textContent = `Error: ${err.message}`;
+    statusEl.style.color = '#dc2626';
+  }
+});
+
+// ---- Capability request body editor ----
+// Default body without returnChannel. When the checkbox is checked,
+// returnChannel is injected as a dict (the bridge model expects
+// dict[str, Any], not a bare string — see CLAUDE.md §7 findings).
+const CAP_BODY_DEFAULT = JSON.stringify({
+  schemas: ['urn:ietf:params:sarm:api:messages:1.0:Capabilities'],
+  role: 'attestationEngine',
+}, null, 2);
+
+const RETURN_CHANNEL_DEFAULT = {
+  url: 'http://localhost:9000/events',
+  method: 'POST',
+};
+
+function buildCapBody() {
+  const editor = $('#cfg-cap-body-text');
+  const includeRC = $('#chk-return-channel').checked;
+  let body;
+  try {
+    body = JSON.parse(editor.value);
+  } catch {
+    // If the editor has invalid JSON, fall back to the default
+    body = {
+      schemas: ['urn:ietf:params:sarm:api:messages:1.0:Capabilities'],
+      role: 'attestationEngine',
+    };
+  }
+  if (includeRC) {
+    body.returnChannel = RETURN_CHANNEL_DEFAULT;
+  } else {
+    delete body.returnChannel;
+  }
+  editor.value = JSON.stringify(body, null, 2);
+}
+
+$('#cfg-cap-body-text').value = CAP_BODY_DEFAULT;
+
+$('#chk-return-channel').addEventListener('change', () => {
+  buildCapBody();
+  // Auto-generate a bearer token when enabling returnChannel,
+  // but only if the user hasn't already entered one.
+  const tokenInput = $('#cfg-token');
+  if ($('#chk-return-channel').checked && !tokenInput.value.trim()) {
+    tokenInput.value = 'inspector-' + Math.random().toString(36).slice(2, 10);
+  }
+});
+
+$('#btn-toggle-cap-body').addEventListener('click', () => {
+  const editor = $('#cfg-cap-body-editor');
+  const btn = $('#btn-toggle-cap-body');
+  const isOpen = !editor.classList.contains('hidden');
+  if (isOpen) { hide(editor); btn.textContent = 'Edit Capabilities Request Body'; }
+  else { show(editor); btn.textContent = 'Hide Capabilities Request Body'; }
+});
+
+// ---- Capability Exchange (§4.7) ----
+$('#btn-capabilities').addEventListener('click', async () => {
+  const base = $('#cfg-base').value.replace(/\/+$/, '');
+  const token = $('#cfg-token').value;
+  if (!base) { alert('Enter a base URL first.'); return; }
+  state.baseUrl = base;
+  state.token = token;
+  state.traffic = [];
+  state.capabilities = null;
+
+  const statusEl = $('#cfg-status');
+  statusEl.textContent = 'Exchanging capabilities…';
+  hide($('#cfg-capabilities'));
+
+  // Parse the request body from the editor (fall back to default on parse error)
+  let reqBody;
+  try {
+    reqBody = JSON.parse($('#cfg-cap-body-text').value);
+  } catch (err) {
+    alert('Invalid JSON in capabilities request body: ' + err.message);
+    return;
+  }
+
+  try {
+    const path = '/sarm/v1/capabilities';
+    const { body, status } = await httpFetch(path, { method: 'POST', body: reqBody });
+    if (status !== 200 || !body) {
+      statusEl.textContent = `Capabilities error (${status}).`;
+      statusEl.style.color = '#dc2626';
+      return;
+    }
+    state.capabilities = body;
+    show($('#cfg-capabilities'));
+    $('#cfg-capabilities-body').textContent = JSON.stringify(body, null, 2);
+    // Open the accordion
+    const header = $('#cfg-capabilities .accordion-header');
+    const bodyEl = $('#cfg-capabilities .accordion-body');
+    if (header) header.classList.add('open');
+    if (bodyEl) bodyEl.classList.add('open');
+    statusEl.textContent = 'Capabilities exchanged ✓';
+    statusEl.style.color = '#16a34a';
+  } catch (err) {
+    statusEl.textContent = `Error: ${err.message}`;
+    statusEl.style.color = '#dc2626';
+  }
+});
+
+// Show traffic from config view
+$('#btn-show-traffic-config').addEventListener('click', toggleTraffic);
+
+// ---- List view ----
+function showListView() {
+  showView('list-view');
+  $('#list-count').textContent = `${state.totalCount} item(s) total`;
+  renderItemsTable();
+  setStatus('list-dot', 'list-status', 'ok', `${state.scopeItems.length} loaded`);
+  hide($('#list-error'));
+  hide($('#list-traffic-log'));
+  state.trafficVisible = false;
+}
+
+function renderItemsTable() {
+  const tbody = $('#items-tbody');
+  if (!state.scopeItems.length) {
+    tbody.innerHTML = '<tr><td colspan="4" class="text-muted text-sm">No ScopeItems found.</td></tr>';
+    return;
+  }
+  tbody.innerHTML = state.scopeItems.map(item => {
+    const opts = (item.decisionOptions || []).map(o =>
+      `<span class="chip" title="${escapeHtml(o.label)}">${escapeHtml(o.value)}</span>`
+    ).join('');
+    return `<tr data-id="${escapeHtml(item.id)}">
+      <td class="id-col">${escapeHtml(item.id)}</td>
+      <td class="label-col" title="${escapeHtml(item.subjectLabel || '')}">${escapeHtml(item.subjectLabel || '—')}</td>
+      <td class="mono">${escapeHtml(item.certifierHint || '—')}</td>
+      <td class="options-col">${opts}</td>
+    </tr>`;
+  }).join('');
+
+  // Pagination
+  renderPagination();
+}
+
+function renderPagination() {
+  const total = state.totalCount || state.scopeItems.length;
+  const count = state.scopeItems.length;
+  const page = state.currentPage;
+  const pages = Math.max(1, Math.ceil(total / 25));
+  if (pages <= 1) { hide($('#list-pagination')); return; }
+  show($('#list-pagination'));
+  let html = `<button class="btn-sm" ${page <= 1 ? 'disabled' : ''} data-page="${page - 1}">&laquo; Prev</button>`;
+  for (let p = 1; p <= pages; p++) {
+    if (p === page) {
+      html += `<span class="badge badge-info">${p}</span>`;
+    } else {
+      html += `<button class="btn-sm" data-page="${p}">${p}</button>`;
+    }
+  }
+  html += `<button class="btn-sm" ${page >= pages ? 'disabled' : ''} data-page="${page + 1}">Next &raquo;</button>`;
+  html += `<span style="margin-left:auto;font-size:0.82rem;color:#6b7280">Page ${page} of ${pages}</span>`;
+  $('#list-pagination').innerHTML = html;
+}
+
+// Pagination event delegation
+$('#list-pagination').addEventListener('click', (e) => {
+  const btn = e.target.closest('[data-page]');
+  if (!btn || btn.disabled) return;
+  const page = parseInt(btn.dataset.page, 10);
+  fetchPage(page);
+});
+
+async function fetchPage(page) {
+  setStatus('list-dot', 'list-status', 'idle', `Loading page ${page}…`);
+  try {
+    const { body, status } = await httpFetch(`/sarm/v1/ScopeItems?startIndex=${page}&count=25`);
+    if (status !== 200 || !body.Resources) throw new Error(`Unexpected response (${status})`);
+    state.listResponse = body;
+    state.scopeItems = body.Resources;
+    state.currentPage = body.startIndex || page;
+    state.totalCount = body.totalResults || body.Resources.length;
+    renderItemsTable();
+    setStatus('list-dot', 'list-status', 'ok', `Page ${state.currentPage}: ${state.scopeItems.length} items`);
+  } catch (err) {
+    show($('#list-error'));
+    $('#list-error').innerHTML = `<div class="error-msg">${escapeHtml(err.message)}</div>`;
+    setStatus('list-dot', 'list-status', 'err', err.message);
+  }
+}
+
+$('#btn-refresh').addEventListener('click', () => fetchPage(state.currentPage));
+
+// Item row click → detail
+$('#items-tbody').addEventListener('click', (e) => {
+  const tr = e.target.closest('tr[data-id]');
+  if (!tr) return;
+  const item = state.scopeItems.find(i => i.id === tr.dataset.id);
+  if (!item) return;
+  // Highlight selected
+  $('#items-tbody').querySelectorAll('tr').forEach(r => r.classList.remove('selected'));
+  tr.classList.add('selected');
+  showDetailView(item);
+});
+
+// ---- Detail view ----
+function showDetailView(item) {
+  state.currentItem = item;
+  showView('detail-view');
+  hide($('#decision-result'));
+  hide($('#detail-traffic-log'));
+  state.trafficVisible = false;
+
+  const grid = $('#detail-grid');
+  grid.innerHTML = `
+    <span class="field-label">ID</span>
+    <span class="field-value mono">${escapeHtml(item.id)}</span>
+    <span class="field-label">Subject ID</span>
+    <span class="field-value mono">${escapeHtml(item.subjectId || '—')}</span>
+    <span class="field-label">Subject Label</span>
+    <span class="field-value">${escapeHtml(item.subjectLabel || '—')}</span>
+    <span class="field-label">Certifier</span>
+    <span class="field-value mono">${escapeHtml(item.certifierHint || '—')}</span>
+    <span class="field-label">Decision Prompt</span>
+    <span class="field-value">${escapeHtml(item.decisionPrompt || '—')}</span>
+    <span class="field-label">Resource ID</span>
+    <span class="field-value mono">${escapeHtml(item.resourceId || '—')}</span>
+    <span class="field-label">Resource Label</span>
+    <span class="field-value">${escapeHtml(item.resourceLabel || '—')}</span>
+    <span class="field-label">Decision Options</span>
+    <span class="field-value">${(item.decisionOptions || []).map(o =>
+      `<span class="chip" title="${escapeHtml(o.label)}">${escapeHtml(o.value)}: ${escapeHtml(o.label)}</span>`
+    ).join('')}</span>
+    <span class="field-label">Meta</span>
+    <span class="field-value mono text-sm">${item.meta ? JSON.stringify(item.meta).substring(0, 120) + '…' : '—'}</span>
+  `;
+
+  // Context data
+  const ctxEl = $('#detail-context');
+  if (item.contextData && typeof item.contextData === 'object' && Object.keys(item.contextData).length) {
+    show(ctxEl);
+    $('#detail-context-pre').textContent = JSON.stringify(item.contextData, null, 2);
+  } else {
+    hide(ctxEl);
+  }
+
+  // Decision options dropdown — populated from the ScopeItem's decisionOptions (§3.3.1)
+  const sel = $('#dec-select');
+  sel.innerHTML = '<option value="">— select —</option>';
+  (item.decisionOptions || []).forEach(opt => {
+    const o = document.createElement('option');
+    o.value = opt.value;
+    o.textContent = `${opt.label} (${opt.value})`;
+    sel.appendChild(o);
+  });
+  // Reset decision id when the user picks a different item — next submission
+  // gets a fresh id. Also listen for decision-select changes.
+  state.lastDecisionId = null;
+  sel.onchange = () => { state.lastDecisionId = null; };
+
+  // Pre-fill certifier from scopeItem
+  $('#dec-certifier').value = item.certifierHint || '';
+
+  // Reset decision id so the next submission gets a fresh id (SARM §5.4)
+  state.lastDecisionId = null;
+
+  setStatus('detail-dot', 'detail-status', 'ok', 'Ready');
+}
+
+// ---- Send decision (§5) ----
+$('#btn-send-decision').addEventListener('click', async () => {
+  const item = state.currentItem;
+  if (!item) return;
+
+  const decision = $('#dec-select').value;
+  if (!decision) { alert('Select a decision.'); return; }
+
+  const certifierId = $('#dec-certifier').value.trim();
+  if (!certifierId) { alert('Enter a certifier ID.'); return; }
+
+  const channel = $('#dec-channel').value;
+  const comment = $('#dec-comment').value.trim() || null;
+  const dryRun = $('#chk-dryrun').checked;
+
+  // Build Decision resource per SARM v0.3 §3.4.
+  // Per §5.4 the AE MUST reuse the same decision id on retries so the SS
+  // can recognise the replay (200 OK) rather than recording a duplicate (201).
+  // We generate one id per (item, decision) pair and reuse it until the user
+  // picks a different item or decision.
+  if (!state.lastDecisionId) {
+    state.lastDecisionId = 'inspector-' + Date.now() + '-' + Math.random().toString(36).slice(2, 8);
+  }
+  const decResource = {
+    id: state.lastDecisionId,
+    scopeItemId: item.id,
+    decision: decision,
+    certifierId: certifierId,
+    decidedAt: new Date().toISOString(),
+    channel: channel,
+  };
+  if (comment) decResource.comment = comment;
+
+  setStatus('detail-dot', 'detail-status', 'idle', dryRun ? 'Dry-run: previewing…' : 'Sending decision…');
+
+  if (dryRun) {
+    // Show preview without sending
+    $('#decision-result').classList.remove('hidden');
+    $('#decision-result').innerHTML = `
+      <div class="panel">
+        <h3>Dry-run Preview</h3>
+        <p class="text-sm text-muted mb-8">The following request <strong>would be sent</strong> (dry-run mode):</p>
+        <div class="accordion">
+          <div class="accordion-header open">
+            <span class="arrow">&#9654;</span>
+            <span>POST /sarm/v1/Decisions</span>
+          </div>
+          <div class="accordion-body open">
+            <pre>${escapeHtml(JSON.stringify({
+              method: 'POST',
+              url: state.baseUrl + '/sarm/v1/Decisions',
+              headers: { 'Content-Type': 'application/scim+json', ...(state.token ? { 'Authorization': 'Bearer ***' } : {}) },
+              body: decResource,
+            }, null, 2))}</pre>
+          </div>
+        </div>
+        <p class="text-sm mt-8"><button id="btn-actual-send" class="btn btn-sm">Actually Send (override dry-run)</button></p>
+      </div>`;
+    // Wire up "actually send" button
+    $('#btn-actual-send').addEventListener('click', () => {
+      $('#chk-dryrun').checked = false;
+      $('#btn-send-decision').click();
+    });
+    setStatus('detail-dot', 'detail-status', 'ok', 'Dry-run preview shown');
+    return;
+  }
+
+  // Actually send (§5.1, §5.4)
+  try {
+    const { body, status } = await httpFetch('/sarm/v1/Decisions', { method: 'POST', body: decResource });
+    $('#decision-result').classList.remove('hidden');
+    const ok = status >= 200 && status < 300;
+    $('#decision-result').innerHTML = `
+      <div class="panel">
+        <h3>Response</h3>
+        <p class="text-sm ${ok ? '' : 'error-msg'}" style="${ok ? '' : 'background:#fef2f2;border:1px solid #fecaca;padding:6px 10px;border-radius:4px;'}">
+          ${ok ? (status === 200 ? 'Idempotent replay accepted.' : 'Decision accepted (201 Created).') : `Error ${status}.`}
+        </p>
+        <div class="accordion">
+          <div class="accordion-header open">
+            <span class="arrow">&#9654;</span>
+            <span>Response (${status})</span>
+          </div>
+          <div class="accordion-body open">
+            <pre>${escapeHtml(JSON.stringify(body, null, 2))}</pre>
+          </div>
+        </div>
+      </div>`;
+    setStatus('detail-dot', 'detail-status', ok ? 'ok' : 'err', ok ? 'Decision accepted' : `Error ${status}`);
+  } catch (err) {
+    $('#decision-result').classList.remove('hidden');
+    $('#decision-result').innerHTML = `
+      <div class="panel">
+        <h3>Request Failed</h3>
+        <p class="error-msg">${escapeHtml(err.message)}</p>
+      </div>`;
+    setStatus('detail-dot', 'detail-status', 'err', err.message);
+  }
+});
+
+// ---- Back buttons ----
+$('#btn-back-config').addEventListener('click', () => {
+  showView('config-view');
+  hide($('#config-traffic-log'));
+  state.trafficVisible = false;
+});
+$('#btn-back-list').addEventListener('click', () => {
+  showListView();
+});
+
+// Traffic log toggle in detail/list views
+$('#btn-show-traffic-detail').addEventListener('click', toggleTraffic);
+$('#btn-show-traffic-list').addEventListener('click', toggleTraffic);
+
+// ---- Status helper ----
+function setStatus(dotId, textId, type, text) {
+  const dot = $(`#${dotId}`);
+  const textEl = $(`#${textId}`);
+  dot.className = 'status-dot ' + type;
+  textEl.textContent = text;
+}
+
+// ---- Keyboard shortcut: Escape goes back ----
+document.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape') {
+    if (!$('#detail-view').classList.contains('hidden')) {
+      $('#btn-back-list').click();
+    } else if (!$('#list-view').classList.contains('hidden')) {
+      $('#btn-back-config').click();
+    }
+  }
+});
+</script>
+</body>
+</html>

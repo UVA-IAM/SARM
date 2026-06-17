@@ -1,0 +1,75 @@
+# SARM Source System Bridge — Example Configuration
+# Copy to config.yaml and adjust for your environment.
+#
+# Database URL can also be set via SARM_DATABASE_URL environment variable.
+# See .env.example for available environment variables.
+
+# Database connection (SQLAlchemy connection string)
+# SQLite is the default — works out of the box with the seed script.
+# For other databases, replace with the appropriate connection string:
+#   PostgreSQL:  postgresql+psycopg2://user:pass@host:5432/dbname
+#   MySQL:       mysql+pymysql://user:pass@host:3306/dbname
+#   Oracle:      oracle+cx_oracle://user:pass@host:1521/service_name
+#   SQL Server:  mssql+pyodbc://user:pass@host/dbname?driver=ODBC+Driver+18+for+SQL+Server
+database:
+  url: "sqlite:////app/data/sample.sqlite"
+
+# Conformance level advertised in the Capability Exchange (§4.6)
+# 1 = basic (pagination required, filtering optional)
+# 2 = full (filtering + attribute selection supported)
+# 3 = push (can push scope.discovered events)
+conformance_level: 2
+
+# When True, decision actions are logged but NOT applied to the database.
+# Set to False to actually execute decision actions (requires write access).
+dry_run_decisions: true
+
+# Decision response mode: "sync" (default, returns 201/200 immediately)
+# or "async" (returns 202 Accepted; AE awaits a completion event).
+# Also settable via SARM_DECISIONS_SYNC_MODE env var.
+decisions_sync_mode: sync
+
+# Decision replay disposition: "allow" (default, accepts new decisions
+# for any item) or "disallow" (returns 409 Conflict if a new decision
+# targets an item that already has a recorded decision).
+# Also settable via SARM_DECISIONS_REPLAY_DISPOSITION env var.
+decisions_replay_disposition: allow
+
+# Scope query definitions.
+# Each query maps database rows to SARM ScopeItems.
+# The bridge uses the first query definition (single-source for now).
+scope_queries:
+  - name: "Sample scope items"
+    # SQL that returns columns matching the column mappings below.
+    # For the sample SQLite dataset, this returns all rows from scope_items.
+    sql: "SELECT * FROM scope_items"
+
+    # Column names in the SQL result set
+    subject_id_column: "subject_id"
+    subject_label_column: "subject_label"
+    certifier_hint_column: "certifier_hint"
+    decision_options_column: "decision_options"
+
+    # Optional grouping columns
+    resource_id_column: "resource_id"
+    resource_label_column: "resource_label"
+    decision_prompt_column: "decision_prompt"
+
+    # Columns to include as contextData (human-display only)
+    context_data_columns:
+      - "memberSince"
+      - "lastAccessAt"
+      - "addedBy"
+
+# Decision-to-action mappings.
+# When a decision arrives with a matching "value", the configured action is applied.
+# Actions:
+#   "none"    — record only, no automated action
+#   "write"   — execute the SQL statement (subject to dry_run_decisions)
+#   "dry-run" — log what would happen without executing
+decision_actions:
+  - value: "remove_membership"
+    action: "dry-run"
+    # sql: "DELETE FROM group_members WHERE user_id = :scopeItemId"
+  - value: "keep_membership"
+    action: "none"

@@ -1,0 +1,46 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "SARM Error",
+  "description": "Error object returned by SARM endpoints per §10. Body-authoritative: protocol meaning is carried in this body, not in the HTTP status code alone.",
+  "type": "object",
+  "required": ["schemas", "status", "scimType"],
+  "properties": {
+    "schemas": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "const": "urn:ietf:params:sarm:api:messages:1.0:Error"
+      },
+      "minItems": 1,
+      "description": "MUST contain the Error schema URI."
+    },
+    "status": {
+      "type": "string",
+      "pattern": "^\\d{3}$",
+      "description": "HTTP status code as a string (e.g., \"400\")."
+    },
+    "scimType": {
+      "type": "string",
+      "enum": [
+        "invalidFilter",
+        "tooMany",
+        "mutateReadOnly",
+        "reqBodyBody",
+        "noTarget",
+        "invalidSyntax",
+        "invalidPath",
+        "noSuchAttribute",
+        "unique",
+        "invalidValue",
+        "invalidGroup",
+        "unavailable"
+      ],
+      "description": "SCIM-style error type per [SCIM] §3.12 where applicable."
+    },
+    "detail": {
+      "type": "string",
+      "description": "Human-readable detail about the error."
+    }
+  },
+  "additionalProperties": false
+}

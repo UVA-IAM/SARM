@@ -1,0 +1,40 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "SARM Event",
+  "description": "Event envelope per §7. SARM standardizes only the envelope structure; it does NOT define an event vocabulary. The 'type' field is a Source-System-determined string, declared via the capability exchange (§4.7).",
+  "type": "object",
+  "required": ["schemas", "id", "type", "occurredAt", "source"],
+  "properties": {
+    "schemas": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "const": "urn:ietf:params:sarm:api:messages:1.0:Event"
+      },
+      "minItems": 1
+    },
+    "id": {
+      "type": "string",
+      "description": "Unique event identifier; the consumer's idempotency key per §7.3."
+    },
+    "type": {
+      "type": "string",
+      "description": "Event type: a Source-System-determined string. SARM defines no values. Conventional names (remediation.confirmed, scope.discovered) are illustrative only per §7.2."
+    },
+    "occurredAt": {
+      "type": "string",
+      "format": "date-time",
+      "description": "RFC 3339 timestamp of when the event occurred."
+    },
+    "source": {
+      "type": "string",
+      "format": "uri",
+      "description": "Identifies the emitting Source System. Used to apply the correct declared vocabulary when working with multiple Source Systems."
+    },
+    "data": {
+      "type": "object",
+      "description": "Event-specific payload. Structure is determined by the event type."
+    }
+  },
+  "additionalProperties": true
+}
