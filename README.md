@@ -74,7 +74,7 @@ Open an issue or discussion to weigh in.
 
 ## Authors
 
-- **David Hutchins** — Assistant Director of Identity Solutions, University of Virginia
+- **David Hutchins** — University of Virginia
 - **Kellen Murphy** — University of Virginia
 - **Carter Griffin** — Northern Arizona University
 
